@@ -1,39 +1,29 @@
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { Shield, List, Plus, Database, RefreshCcw } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
-
-interface UsbDevice {
-  vendor_id: string;
-  product_id: string;
-  whitelisted: boolean;
-}
+import { fetchConnectedDevices, fetchLogs, addToWhitelist, blockDevice, type UsbDevice } from "@/services/api";
 
 const Dashboard = () => {
-  // Mock data for demonstration
-  const [devices, setDevices] = useState<UsbDevice[]>([
-    { vendor_id: "0x1234", product_id: "0x5678", whitelisted: true },
-    { vendor_id: "0x9ABC", product_id: "0xDEF0", whitelisted: false },
-  ]);
-  
-  const [logs] = useState<string>("Sample log entry 1\nSample log entry 2\nSample log entry 3");
+  const [logs, setLogs] = useState<string>("");
+  const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  const handleDeviceAction = (device: UsbDevice, action: 'whitelist' | 'block') => {
-    // Update UI state locally
-    const updatedDevices = devices.map(d => 
-      d.vendor_id === device.vendor_id && d.product_id === device.product_id
-        ? { ...d, whitelisted: action === 'whitelist' }
-        : d
-    );
-    setDevices(updatedDevices);
+  const { data: devices = [] } = useQuery({
+    queryKey: ['devices'],
+    queryFn: fetchConnectedDevices,
+    refetchInterval: 5000, // Refresh every 5 seconds
+  });
 
-    // Show toast notification
-    toast({
-      title: action === 'whitelist' ? "Device Whitelisted" : "Device Blocked",
-      description: `Device ${device.vendor_id}:${device.product_id} has been ${action === 'whitelist' ? 'added to whitelist' : 'blocked'}.`,
-    });
-  };
+  useEffect(() => {
+    const loadLogs = async () => {
+      const logsData = await fetchLogs();
+      setLogs(logsData);
+    };
+    loadLogs();
+  }, []);
 
   const stats = [
     {
@@ -59,12 +49,37 @@ const Dashboard = () => {
     },
   ];
 
+  const handleDeviceAction = async (device: UsbDevice, action: 'whitelist' | 'block') => {
+    try {
+      if (action === 'whitelist') {
+        await addToWhitelist(device.vendor_id, device.product_id);
+        toast({
+          title: "Device Whitelisted",
+          description: `Device ${device.vendor_id}:${device.product_id} has been added to whitelist.`,
+        });
+      } else {
+        await blockDevice(device.vendor_id, device.product_id);
+        toast({
+          title: "Device Blocked",
+          description: `Device ${device.vendor_id}:${device.product_id} has been blocked.`,
+        });
+      }
+      queryClient.invalidateQueries({ queryKey: ['devices'] });
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to update device status.",
+      });
+    }
+  };
+
   return (
     <div className="p-8 max-w-7xl mx-auto">
       <div className="flex justify-between items-center mb-8">
         <h1 className="text-3xl font-bold text-gray-900">Dashboard Overview</h1>
         <button
-          onClick={() => toast({ title: "Refreshed", description: "Dashboard data has been refreshed." })}
+          onClick={() => queryClient.invalidateQueries({ queryKey: ['devices'] })}
           className="inline-flex items-center px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
         >
           <RefreshCcw className="w-5 h-5 mr-2" />
@@ -146,4 +161,3 @@ const Dashboard = () => {
 };
 
 export default Dashboard;
-

@@ -7,32 +7,11 @@ export interface UsbDevice {
   whitelisted: boolean;
 }
 
-const fetchWithErrorHandling = async (url: string, options?: RequestInit) => {
-  try {
-    const response = await fetch(url, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
-      credentials: 'include', // This allows cookies to be sent
-      mode: 'cors', // Explicitly set CORS mode
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    return response;
-  } catch (error) {
-    console.error('API request failed:', error);
-    throw new Error('Could not connect to the server. Please ensure the backend is running on http://localhost:5000');
-  }
-};
-
 export const fetchConnectedDevices = async (): Promise<UsbDevice[]> => {
-  const response = await fetchWithErrorHandling(`${API_BASE_URL}/`);
+  const response = await fetch(`${API_BASE_URL}/`);
   const html = await response.text();
+  // Parse devices from HTML response (temporary solution)
+  // In production, the backend should return JSON instead
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
   const rows = doc.querySelectorAll('table tbody tr');
@@ -48,7 +27,7 @@ export const fetchConnectedDevices = async (): Promise<UsbDevice[]> => {
 };
 
 export const fetchLogs = async (): Promise<string> => {
-  const response = await fetchWithErrorHandling(`${API_BASE_URL}/logs`);
+  const response = await fetch(`${API_BASE_URL}/logs`);
   const html = await response.text();
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
@@ -60,7 +39,7 @@ export const addToWhitelist = async (vendor_id: string, product_id: string): Pro
   formData.append('vendor_id', vendor_id);
   formData.append('product_id', product_id);
   
-  await fetchWithErrorHandling(`${API_BASE_URL}/whitelist`, {
+  await fetch(`${API_BASE_URL}/whitelist`, {
     method: 'POST',
     body: formData
   });
@@ -71,9 +50,8 @@ export const blockDevice = async (vendor_id: string, product_id: string): Promis
   formData.append('vendor_id', vendor_id);
   formData.append('product_id', product_id);
   
-  await fetchWithErrorHandling(`${API_BASE_URL}/block`, {
+  await fetch(`${API_BASE_URL}/block`, {
     method: 'POST',
     body: formData
   });
 };
-
