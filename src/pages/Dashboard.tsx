@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { Shield, List, Plus, Database, Check, X, Filter } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
+import { fetchUSBDevices, monitorUSBPorts, addDeviceToWhitelist } from "@/lib/usb-service";
 
 const Dashboard = () => {
   const { toast } = useToast();
@@ -18,24 +19,11 @@ const Dashboard = () => {
   const [statusFilter, setStatusFilter] = useState("all");
   const [usernameFilter, setUsernameFilter] = useState("");
   
-  const whitelistedDevices = [
-    { id: 1, productId: "0x1234", vendorId: "0x5678", manufacturer: "Kingston", username: "john.doe", status: "allowed" },
-    { id: 2, productId: "0x4321", vendorId: "0x8765", manufacturer: "SanDisk", username: "jane.smith", status: "allowed" },
-    { id: 3, productId: "0xabcd", vendorId: "0xefgh", manufacturer: "Seagate", username: "admin", status: "allowed" },
-  ];
-  
-  const blockedAttempts = [
-    { id: 1, productId: "0x9876", vendorId: "0x5432", manufacturer: "Unknown Device", username: "guest", status: "blocked", date: "2025-03-03", time: "14:32:45" },
-    { id: 2, productId: "0xfedc", vendorId: "0xba98", manufacturer: "Generic USB", username: "test.user", status: "blocked", date: "2025-03-02", time: "09:15:22" },
-  ];
-  
-  const logs = [
-    { id: 1, productId: "0x1234", vendorId: "0x5678", manufacturer: "Kingston", username: "john.doe", status: "allowed", date: "2025-03-03", time: "15:42:18", action: "connected" },
-    { id: 2, productId: "0x9876", vendorId: "0x5432", manufacturer: "Unknown Device", username: "guest", status: "blocked", date: "2025-03-03", time: "14:32:45", action: "blocked" },
-    { id: 3, productId: "0x4321", vendorId: "0x8765", manufacturer: "SanDisk", username: "jane.smith", status: "allowed", date: "2025-03-03", time: "12:10:33", action: "disconnected" },
-    { id: 4, productId: "0xfedc", vendorId: "0xba98", manufacturer: "Generic USB", username: "test.user", status: "blocked", date: "2025-03-02", time: "09:15:22", action: "blocked" },
-    { id: 5, productId: "0xabcd", vendorId: "0xefgh", manufacturer: "Seagate", username: "admin", status: "allowed", date: "2025-03-01", time: "17:23:05", action: "connected" },
-  ];
+  const [whitelistedDevices, setWhitelistedDevices] = useState([]);
+  const [blockedAttempts, setBlockedAttempts] = useState([]);
+  const [logs, setLogs] = useState([]);
+  const [isMonitoring, setIsMonitoring] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(new Date());
 
   const [newDevice, setNewDevice] = useState({
     productId: "",
@@ -44,32 +32,150 @@ const Dashboard = () => {
     username: ""
   });
 
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const data = await fetchUSBDevices();
+        setWhitelistedDevices(data.whitelistedDevices || []);
+        setBlockedAttempts(data.blockedAttempts || []);
+        setLogs(data.logs || []);
+        setLastUpdated(new Date());
+      } catch (error) {
+        console.error("Error fetching USB devices:", error);
+        toast({
+          title: "Error",
+          description: "Failed to fetch USB devices data",
+          variant: "destructive",
+        });
+      }
+    };
+    
+    fetchData();
+  }, [toast]);
+
+  useEffect(() => {
+    let monitoringSubscription;
+    
+    const startMonitoring = async () => {
+      try {
+        setIsMonitoring(true);
+        monitoringSubscription = await monitorUSBPorts((newData) => {
+          if (newData.newLog) {
+            setLogs(prev => [newData.newLog, ...prev]);
+          }
+          
+          if (newData.newBlockedAttempt) {
+            setBlockedAttempts(prev => [newData.newBlockedAttempt, ...prev]);
+          }
+          
+          if (newData.whitelistUpdate) {
+            setWhitelistedDevices(newData.whitelistUpdate);
+          }
+          
+          setLastUpdated(new Date());
+          
+          if (newData.newBlockedAttempt) {
+            toast({
+              title: "USB Access Blocked",
+              description: `${newData.newBlockedAttempt.manufacturer || "Unknown device"} was blocked from accessing the system`,
+              variant: "destructive",
+            });
+          }
+        });
+      } catch (error) {
+        console.error("Error monitoring USB ports:", error);
+        setIsMonitoring(false);
+        toast({
+          title: "Monitoring Error",
+          description: "Failed to start USB port monitoring",
+          variant: "destructive",
+        });
+      }
+    };
+    
+    startMonitoring();
+    
+    return () => {
+      if (monitoringSubscription) {
+        monitoringSubscription.unsubscribe();
+      }
+      setIsMonitoring(false);
+    };
+  }, [toast]);
+
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setNewDevice(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleAddDevice = () => {
-    toast({
-      title: "Success!",
-      description: "Device added to whitelist successfully",
-      variant: "default",
-    });
-    setShowAddDeviceModal(false);
-    setNewDevice({
-      productId: "",
-      vendorId: "",
-      manufacturer: "",
-      username: ""
-    });
+  const handleAddDevice = async () => {
+    try {
+      await addDeviceToWhitelist(newDevice);
+      
+      setWhitelistedDevices(prev => [
+        ...prev, 
+        {
+          id: Date.now(),
+          ...newDevice,
+          status: "allowed"
+        }
+      ]);
+      
+      toast({
+        title: "Success!",
+        description: "Device added to whitelist successfully",
+        variant: "default",
+      });
+      
+      setShowAddDeviceModal(false);
+      setNewDevice({
+        productId: "",
+        vendorId: "",
+        manufacturer: "",
+        username: ""
+      });
+    } catch (error) {
+      console.error("Error adding device to whitelist:", error);
+      toast({
+        title: "Error",
+        description: "Failed to add device to whitelist",
+        variant: "destructive",
+      });
+    }
   };
 
-  const handleAddToWhitelist = (device) => {
-    toast({
-      title: "Success!",
-      description: "Device added to whitelist successfully",
-      variant: "default",
-    });
+  const handleAddToWhitelist = async (device) => {
+    try {
+      await addDeviceToWhitelist(device);
+      
+      setWhitelistedDevices(prev => [
+        ...prev, 
+        {
+          ...device,
+          status: "allowed"
+        }
+      ]);
+      
+      setBlockedAttempts(prev => 
+        prev.filter(item => 
+          !(item.productId === device.productId && 
+            item.vendorId === device.vendorId)
+        )
+      );
+      
+      toast({
+        title: "Success!",
+        description: "Device added to whitelist successfully",
+        variant: "default",
+      });
+    } catch (error) {
+      console.error("Error adding device to whitelist:", error);
+      toast({
+        title: "Error",
+        description: "Failed to add device to whitelist",
+        variant: "destructive",
+      });
+    }
   };
 
   const stats = [
@@ -77,21 +183,21 @@ const Dashboard = () => {
       title: "Total USB Events",
       value: logs.length.toString(),
       icon: Database,
-      change: "+12.3%",
-      changeType: "positive",
+      change: logs.length > 0 ? `Last: ${new Date(logs[0]?.date).toLocaleTimeString()}` : "No events",
+      changeType: "neutral",
     },
     {
       title: "Blocked Attempts",
       value: blockedAttempts.length.toString(),
       icon: Shield,
-      change: "-5.4%",
+      change: blockedAttempts.length > 0 ? `Last: ${new Date(blockedAttempts[0]?.date).toLocaleTimeString()}` : "No blocks",
       changeType: "negative",
     },
     {
       title: "Whitelisted Devices",
       value: whitelistedDevices.length.toString(),
       icon: List,
-      change: "+3.2%",
+      change: `${whitelistedDevices.length} devices`,
       changeType: "positive",
     },
   ];
@@ -111,7 +217,14 @@ const Dashboard = () => {
   return (
     <div className="p-8 max-w-7xl mx-auto">
       <div className="flex justify-between items-center mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">Dashboard Overview</h1>
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Dashboard Overview</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            {isMonitoring ? 
+              "USB Ports Monitoring Active" : 
+              "Monitoring Inactive"} | Last Updated: {lastUpdated.toLocaleTimeString()}
+          </p>
+        </div>
         <Button 
           onClick={() => setShowAddDeviceModal(true)}
           className="inline-flex items-center px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
@@ -146,7 +259,9 @@ const Dashboard = () => {
               <stat.icon className="w-8 h-8 text-primary" />
               <span
                 className={`text-sm font-medium ${
-                  stat.changeType === "positive" ? "text-green-600" : "text-red-600"
+                  stat.changeType === "positive" ? "text-green-600" : 
+                  stat.changeType === "negative" ? "text-red-600" : 
+                  "text-gray-600"
                 }`}
               >
                 {stat.change}
@@ -176,20 +291,28 @@ const Dashboard = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {whitelistedDevices.map((device) => (
-                      <TableRow key={device.id}>
-                        <TableCell>{device.productId}</TableCell>
-                        <TableCell>{device.vendorId}</TableCell>
-                        <TableCell>{device.manufacturer}</TableCell>
-                        <TableCell>{device.username}</TableCell>
-                        <TableCell>
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                            <Check className="w-3 h-3 mr-1" />
-                            {device.status}
-                          </span>
+                    {whitelistedDevices.length > 0 ? (
+                      whitelistedDevices.map((device) => (
+                        <TableRow key={device.id}>
+                          <TableCell>{device.productId}</TableCell>
+                          <TableCell>{device.vendorId}</TableCell>
+                          <TableCell>{device.manufacturer}</TableCell>
+                          <TableCell>{device.username}</TableCell>
+                          <TableCell>
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                              <Check className="w-3 h-3 mr-1" />
+                              {device.status}
+                            </span>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center py-4 text-gray-500">
+                          No whitelisted devices found
                         </TableCell>
                       </TableRow>
-                    ))}
+                    )}
                   </TableBody>
                 </Table>
               </div>
@@ -203,6 +326,8 @@ const Dashboard = () => {
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Time</TableHead>
                       <TableHead>Product ID</TableHead>
                       <TableHead>Vendor ID</TableHead>
                       <TableHead>Manufacturer</TableHead>
@@ -212,29 +337,39 @@ const Dashboard = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {blockedAttempts.map((device) => (
-                      <TableRow key={device.id}>
-                        <TableCell>{device.productId}</TableCell>
-                        <TableCell>{device.vendorId}</TableCell>
-                        <TableCell>{device.manufacturer}</TableCell>
-                        <TableCell>{device.username}</TableCell>
-                        <TableCell>
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                            <X className="w-3 h-3 mr-1" />
-                            {device.status}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          <Button 
-                            size="sm" 
-                            variant="outline" 
-                            onClick={() => handleAddToWhitelist(device)}
-                          >
-                            Add to Whitelist
-                          </Button>
+                    {blockedAttempts.length > 0 ? (
+                      blockedAttempts.map((device) => (
+                        <TableRow key={device.id}>
+                          <TableCell>{new Date(device.date).toLocaleDateString()}</TableCell>
+                          <TableCell>{new Date(device.date).toLocaleTimeString()}</TableCell>
+                          <TableCell>{device.productId}</TableCell>
+                          <TableCell>{device.vendorId}</TableCell>
+                          <TableCell>{device.manufacturer}</TableCell>
+                          <TableCell>{device.username}</TableCell>
+                          <TableCell>
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                              <X className="w-3 h-3 mr-1" />
+                              {device.status}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              onClick={() => handleAddToWhitelist(device)}
+                            >
+                              Add to Whitelist
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={8} className="text-center py-4 text-gray-500">
+                          No blocked attempts found
                         </TableCell>
                       </TableRow>
-                    ))}
+                    )}
                   </TableBody>
                 </Table>
               </div>
@@ -292,8 +427,8 @@ const Dashboard = () => {
                     {filteredLogs.length > 0 ? (
                       filteredLogs.map((log) => (
                         <TableRow key={log.id}>
-                          <TableCell>{log.date}</TableCell>
-                          <TableCell>{log.time}</TableCell>
+                          <TableCell>{new Date(log.date).toLocaleDateString()}</TableCell>
+                          <TableCell>{new Date(log.date).toLocaleTimeString()}</TableCell>
                           <TableCell>{log.productId}</TableCell>
                           <TableCell>{log.vendorId}</TableCell>
                           <TableCell>{log.manufacturer}</TableCell>
@@ -356,6 +491,25 @@ const Dashboard = () => {
               <div>
                 <h3 className="font-medium">Manage Whitelist</h3>
                 <p className="text-sm text-gray-600">Add or remove USB devices</p>
+              </div>
+            </div>
+            <div className="mt-6">
+              <h3 className="text-sm font-medium mb-2">Monitoring Status</h3>
+              <div className={`p-3 rounded-md ${isMonitoring ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
+                {isMonitoring ? (
+                  <div className="flex items-center">
+                    <div className="relative mr-3">
+                      <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                      <div className="w-3 h-3 bg-green-500 rounded-full absolute top-0 animate-ping"></div>
+                    </div>
+                    <span>USB Monitoring Active</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center">
+                    <div className="w-3 h-3 bg-red-500 rounded-full mr-3"></div>
+                    <span>Monitoring Inactive</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>
