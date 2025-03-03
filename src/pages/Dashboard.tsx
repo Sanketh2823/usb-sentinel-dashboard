@@ -1,11 +1,12 @@
-
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Shield, List, Plus, Database, Check, X } from "lucide-react";
+import { Shield, List, Plus, Database, Check, X, Filter } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 
 const Dashboard = () => {
   const { toast } = useToast();
@@ -14,7 +15,9 @@ const Dashboard = () => {
   const [showLogs, setShowLogs] = useState(false);
   const [showAddDeviceModal, setShowAddDeviceModal] = useState(false);
   
-  // Mock data for devices, logs, and blocked attempts
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [usernameFilter, setUsernameFilter] = useState("");
+  
   const whitelistedDevices = [
     { id: 1, productId: "0x1234", vendorId: "0x5678", manufacturer: "Kingston", username: "john.doe", status: "allowed" },
     { id: 2, productId: "0x4321", vendorId: "0x8765", manufacturer: "SanDisk", username: "jane.smith", status: "allowed" },
@@ -34,7 +37,6 @@ const Dashboard = () => {
     { id: 5, productId: "0xabcd", vendorId: "0xefgh", manufacturer: "Seagate", username: "admin", status: "allowed", date: "2025-03-01", time: "17:23:05", action: "connected" },
   ];
 
-  // Form state for adding new device
   const [newDevice, setNewDevice] = useState({
     productId: "",
     vendorId: "",
@@ -48,7 +50,6 @@ const Dashboard = () => {
   };
 
   const handleAddDevice = () => {
-    // In a real app, this would send data to a backend
     toast({
       title: "Success!",
       description: "Device added to whitelist successfully",
@@ -64,7 +65,6 @@ const Dashboard = () => {
   };
 
   const handleAddToWhitelist = (device) => {
-    // In a real app, this would send data to a backend
     toast({
       title: "Success!",
       description: "Device added to whitelist successfully",
@@ -95,6 +95,18 @@ const Dashboard = () => {
       changeType: "positive",
     },
   ];
+
+  const filteredLogs = logs.filter((log) => {
+    if (statusFilter !== "all" && log.status !== statusFilter) {
+      return false;
+    }
+    
+    if (usernameFilter && !log.username.toLowerCase().includes(usernameFilter.toLowerCase())) {
+      return false;
+    }
+    
+    return true;
+  });
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
@@ -232,6 +244,36 @@ const Dashboard = () => {
           {showLogs && (
             <div>
               <h3 className="text-md font-medium mb-2">All USB Events</h3>
+              
+              <div className="flex flex-col sm:flex-row gap-4 mb-4">
+                <div className="flex items-center gap-2">
+                  <Filter className="w-4 h-4 text-gray-500" />
+                  <span className="text-sm font-medium">Filter by:</span>
+                </div>
+                <div className="flex flex-1 flex-col sm:flex-row gap-4">
+                  <div className="w-full sm:w-1/3">
+                    <Select value={statusFilter} onValueChange={setStatusFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Statuses</SelectItem>
+                        <SelectItem value="allowed">Allowed</SelectItem>
+                        <SelectItem value="blocked">Blocked</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="w-full sm:w-2/3">
+                    <Input
+                      placeholder="Filter by username"
+                      value={usernameFilter}
+                      onChange={(e) => setUsernameFilter(e.target.value)}
+                      className="w-full"
+                    />
+                  </div>
+                </div>
+              </div>
+              
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -247,25 +289,33 @@ const Dashboard = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {logs.map((log) => (
-                      <TableRow key={log.id}>
-                        <TableCell>{log.date}</TableCell>
-                        <TableCell>{log.time}</TableCell>
-                        <TableCell>{log.productId}</TableCell>
-                        <TableCell>{log.vendorId}</TableCell>
-                        <TableCell>{log.manufacturer}</TableCell>
-                        <TableCell>{log.username}</TableCell>
-                        <TableCell>
-                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                            log.status === "allowed" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
-                          }`}>
-                            {log.status === "allowed" ? <Check className="w-3 h-3 mr-1" /> : <X className="w-3 h-3 mr-1" />}
-                            {log.status}
-                          </span>
+                    {filteredLogs.length > 0 ? (
+                      filteredLogs.map((log) => (
+                        <TableRow key={log.id}>
+                          <TableCell>{log.date}</TableCell>
+                          <TableCell>{log.time}</TableCell>
+                          <TableCell>{log.productId}</TableCell>
+                          <TableCell>{log.vendorId}</TableCell>
+                          <TableCell>{log.manufacturer}</TableCell>
+                          <TableCell>{log.username}</TableCell>
+                          <TableCell>
+                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                              log.status === "allowed" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                            }`}>
+                              {log.status === "allowed" ? <Check className="w-3 h-3 mr-1" /> : <X className="w-3 h-3 mr-1" />}
+                              {log.status}
+                            </span>
+                          </TableCell>
+                          <TableCell>{log.action}</TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={8} className="text-center py-4 text-gray-500">
+                          No logs found matching your filters
                         </TableCell>
-                        <TableCell>{log.action}</TableCell>
                       </TableRow>
-                    ))}
+                    )}
                   </TableBody>
                 </Table>
               </div>
@@ -312,7 +362,6 @@ const Dashboard = () => {
         </div>
       </div>
 
-      {/* Add Device Modal */}
       <Dialog open={showAddDeviceModal} onOpenChange={setShowAddDeviceModal}>
         <DialogContent>
           <DialogHeader>
