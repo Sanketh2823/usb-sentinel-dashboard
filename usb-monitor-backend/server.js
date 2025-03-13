@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const WebSocket = require('ws');
 const http = require('http');
-const usbDetect = require('node-usb-detection');
+const usbDetect = require("usb-detection");
 
 const app = express();
 const port = 3001;
