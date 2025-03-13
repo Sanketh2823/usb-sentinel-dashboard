@@ -40,6 +40,24 @@ export const addDeviceToWhitelist = async (device) => {
   }
 };
 
+export const removeDeviceFromWhitelist = async (deviceId) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/whitelist/${deviceId}`, {
+      method: 'DELETE',
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Error removing device from whitelist:", error);
+    throw new Error("Failed to remove device from whitelist");
+  }
+};
+
 // Real-time monitoring using WebSocket
 export const monitorUSBPorts = async (callback) => {
   const socket = new WebSocket(`ws://localhost:3001/usb-events`);

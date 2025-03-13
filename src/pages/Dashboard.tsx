@@ -1,13 +1,14 @@
+
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Shield, List, Plus, Database, Check, X, Filter } from "lucide-react";
+import { Shield, List, Plus, Database, Check, X, Filter, Ban } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { fetchUSBDevices, monitorUSBPorts, addDeviceToWhitelist } from "@/lib/usb-service";
+import { fetchUSBDevices, monitorUSBPorts, addDeviceToWhitelist, removeDeviceFromWhitelist } from "@/lib/usb-service";
 
 const Dashboard = () => {
   const { toast } = useToast();
@@ -178,6 +179,30 @@ const Dashboard = () => {
     }
   };
 
+  const handleBlockDevice = async (deviceId) => {
+    try {
+      await removeDeviceFromWhitelist(deviceId);
+      
+      // Remove the device from the whitelisted devices list
+      setWhitelistedDevices(prev => 
+        prev.filter(device => device.id !== deviceId)
+      );
+      
+      toast({
+        title: "Success!",
+        description: "Device removed from whitelist successfully",
+        variant: "default",
+      });
+    } catch (error) {
+      console.error("Error removing device from whitelist:", error);
+      toast({
+        title: "Error",
+        description: "Failed to remove device from whitelist",
+        variant: "destructive",
+      });
+    }
+  };
+
   const stats = [
     {
       title: "Total USB Events",
@@ -288,6 +313,7 @@ const Dashboard = () => {
                       <TableHead>Manufacturer</TableHead>
                       <TableHead>Username</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -304,11 +330,22 @@ const Dashboard = () => {
                               {device.status}
                             </span>
                           </TableCell>
+                          <TableCell>
+                            <Button 
+                              size="sm" 
+                              variant="destructive" 
+                              onClick={() => handleBlockDevice(device.id)}
+                              className="flex items-center gap-1"
+                            >
+                              <Ban className="w-3 h-3" />
+                              Block
+                            </Button>
+                          </TableCell>
                         </TableRow>
                       ))
                     ) : (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center py-4 text-gray-500">
+                        <TableCell colSpan={6} className="text-center py-4 text-gray-500">
                           No whitelisted devices found
                         </TableCell>
                       </TableRow>

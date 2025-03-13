@@ -1,246 +1,296 @@
 
 const express = require('express');
-const http = require('http');
-const WebSocket = require('ws');
 const cors = require('cors');
-const usbDetect = require('node-usb-detection');
 const fs = require('fs');
 const path = require('path');
+const WebSocket = require('ws');
+const http = require('http');
+const usbDetect = require('node-usb-detection');
 
-// Initialize Express application
 const app = express();
-app.use(cors());
-app.use(express.json());
+const port = 3001;
 
 // Create HTTP server
 const server = http.createServer(app);
 
-// Initialize WebSocket server
+// Setup WebSocket server
 const wss = new WebSocket.Server({ server });
 
-// Data storage files
-const dataDir = path.join(__dirname, 'data');
-const whitelistFile = path.join(dataDir, 'whitelist.json');
-const blockedAttemptsFile = path.join(dataDir, 'blocked-attempts.json');
-const logsFile = path.join(dataDir, 'logs.json');
+// Middleware
+app.use(cors());
+app.use(express.json());
 
-// Ensure data directory exists
+// Data storage paths
+const dataDir = path.join(__dirname, 'data');
+const whitelistPath = path.join(dataDir, 'whitelist.json');
+const blockedAttemptsPath = path.join(dataDir, 'blocked-attempts.json');
+const logsPath = path.join(dataDir, 'logs.json');
+
+// Create data directory if it doesn't exist
 if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir);
+  fs.mkdirSync(dataDir, { recursive: true });
 }
 
 // Initialize data files if they don't exist
-function initializeDataFile(filePath, defaultData) {
-  if (!fs.existsSync(filePath)) {
-    fs.writeFileSync(filePath, JSON.stringify(defaultData, null, 2));
+const initializeDataFiles = () => {
+  if (!fs.existsSync(whitelistPath)) {
+    fs.writeFileSync(whitelistPath, JSON.stringify([]));
   }
-}
+  
+  if (!fs.existsSync(blockedAttemptsPath)) {
+    fs.writeFileSync(blockedAttemptsPath, JSON.stringify([]));
+  }
+  
+  if (!fs.existsSync(logsPath)) {
+    fs.writeFileSync(logsPath, JSON.stringify([]));
+  }
+};
 
-initializeDataFile(whitelistFile, []);
-initializeDataFile(blockedAttemptsFile, []);
-initializeDataFile(logsFile, []);
+initializeDataFiles();
 
-// Read data from files
-function readData(filePath) {
+// Helper functions for data operations
+const readDataFile = (filePath) => {
   try {
     const data = fs.readFileSync(filePath, 'utf8');
     return JSON.parse(data);
   } catch (error) {
-    console.error(`Error reading ${filePath}:`, error);
+    console.error(`Error reading file ${filePath}:`, error);
     return [];
   }
-}
+};
 
-// Write data to files
-function writeData(filePath, data) {
+const writeDataFile = (filePath, data) => {
   try {
     fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+    return true;
   } catch (error) {
-    console.error(`Error writing to ${filePath}:`, error);
+    console.error(`Error writing file ${filePath}:`, error);
+    return false;
   }
-}
+};
 
-// WebSocket connections
-let connections = [];
-
-wss.on('connection', (ws) => {
-  console.log('WebSocket client connected');
-  connections.push(ws);
-  
-  ws.on('close', () => {
-    console.log('WebSocket client disconnected');
-    connections = connections.filter(conn => conn !== ws);
-  });
-});
-
-// Broadcast to all connected clients
-function broadcast(data) {
-  connections.forEach(client => {
+// Broadcast updates to all connected clients
+const broadcastUpdate = (data) => {
+  wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
       client.send(JSON.stringify(data));
     }
   });
-}
+};
 
-// API Routes
+// API Endpoints
 app.get('/api/usb-devices', (req, res) => {
-  const whitelistedDevices = readData(whitelistFile);
-  const blockedAttempts = readData(blockedAttemptsFile);
-  const logs = readData(logsFile);
-  
-  res.json({
-    whitelistedDevices,
-    blockedAttempts,
-    logs
-  });
+  try {
+    const whitelistedDevices = readDataFile(whitelistPath);
+    const blockedAttempts = readDataFile(blockedAttemptsPath);
+    const logs = readDataFile(logsPath);
+    
+    res.json({
+      whitelistedDevices,
+      blockedAttempts,
+      logs
+    });
+  } catch (error) {
+    console.error('Error retrieving USB devices:', error);
+    res.status(500).json({ error: 'Failed to retrieve USB devices' });
+  }
 });
 
+// Add device to whitelist
 app.post('/api/whitelist', (req, res) => {
   try {
-    const device = req.body;
+    const newDevice = req.body;
+    const whitelistedDevices = readDataFile(whitelistPath);
     
-    // Validate required fields
-    if (!device.productId || !device.vendorId) {
-      return res.status(400).json({ success: false, message: "Product ID and Vendor ID are required" });
-    }
-    
-    // Add ID and status
-    const newDevice = {
+    // Add a unique ID and status to the device
+    const deviceWithId = {
+      ...newDevice,
       id: Date.now(),
-      ...device,
-      status: "allowed"
+      status: 'allowed',
+      date: new Date().toISOString()
     };
     
     // Add to whitelist
-    const whitelist = readData(whitelistFile);
-    whitelist.push(newDevice);
-    writeData(whitelistFile, whitelist);
+    whitelistedDevices.push(deviceWithId);
+    writeDataFile(whitelistPath, whitelistedDevices);
     
-    // Remove from blocked attempts if exists
-    const blockedAttempts = readData(blockedAttemptsFile);
-    const filteredBlockedAttempts = blockedAttempts.filter(item => 
-      !(item.productId === device.productId && item.vendorId === device.vendorId)
-    );
-    writeData(blockedAttemptsFile, filteredBlockedAttempts);
+    // Log the action
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      ...deviceWithId,
+      action: 'Added to whitelist',
+      id: Date.now() // Unique ID for log entry
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
     
-    // Add to logs
-    const logs = readData(logsFile);
-    const now = new Date();
-    logs.unshift({
-      id: Date.now(),
-      ...device,
-      status: "allowed",
-      date: now.toISOString(),
-      time: now.toLocaleTimeString(),
-      action: "whitelisted"
+    // Broadcast the update
+    broadcastUpdate({
+      whitelistUpdate: whitelistedDevices,
+      newLog: logEntry
     });
-    writeData(logsFile, logs);
     
-    // Broadcast update
-    broadcast({ whitelistUpdate: whitelist });
-    
-    res.json({ success: true, message: "Device added to whitelist" });
+    res.status(201).json(deviceWithId);
   } catch (error) {
-    console.error("Error adding device to whitelist:", error);
-    res.status(500).json({ success: false, message: "Failed to add device to whitelist" });
+    console.error('Error adding device to whitelist:', error);
+    res.status(500).json({ error: 'Failed to add device to whitelist' });
   }
 });
 
-// USB Detection
-usbDetect.startMonitoring();
-
-// Function to check if a device is whitelisted
-function isDeviceWhitelisted(device) {
-  const whitelist = readData(whitelistFile);
-  return whitelist.some(item => 
-    item.productId === device.productId && 
-    item.vendorId === device.vendorId
-  );
-}
-
-// Handle USB insert events
-usbDetect.on('add', device => {
-  console.log('USB device connected:', device);
-  
-  // Convert device data to our format
-  const usbDevice = {
-    productId: `0x${device.productId.toString(16)}`,
-    vendorId: `0x${device.vendorId.toString(16)}`,
-    manufacturer: device.manufacturer || 'Unknown',
-    username: process.env.USER || 'system',
-    date: new Date().toISOString(),
-    time: new Date().toLocaleTimeString()
-  };
-  
-  const isWhitelisted = isDeviceWhitelisted(usbDevice);
-  const status = isWhitelisted ? "allowed" : "blocked";
-  
-  // Create log entry
-  const logEntry = {
-    id: Date.now(),
-    ...usbDevice,
-    status,
-    action: "connected"
-  };
-  
-  // Add to logs
-  const logs = readData(logsFile);
-  logs.unshift(logEntry);
-  writeData(logsFile, logs);
-  
-  // If device is blocked, add to blocked attempts
-  if (!isWhitelisted) {
+// Remove device from whitelist
+app.delete('/api/whitelist/:id', (req, res) => {
+  try {
+    const deviceId = parseInt(req.params.id);
+    let whitelistedDevices = readDataFile(whitelistPath);
+    
+    // Find the device to remove
+    const deviceToRemove = whitelistedDevices.find(device => device.id === deviceId);
+    
+    if (!deviceToRemove) {
+      return res.status(404).json({ error: 'Device not found in whitelist' });
+    }
+    
+    // Remove from whitelist
+    whitelistedDevices = whitelistedDevices.filter(device => device.id !== deviceId);
+    writeDataFile(whitelistPath, whitelistedDevices);
+    
+    // Log the action
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      ...deviceToRemove,
+      action: 'Removed from whitelist',
+      status: 'blocked',
+      id: Date.now() // Unique ID for log entry
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    
+    // Add to blocked attempts if needed
+    const blockedAttempts = readDataFile(blockedAttemptsPath);
     const blockedEntry = {
+      ...deviceToRemove,
+      status: 'blocked',
+      date: new Date().toISOString(),
+      id: Date.now() // Unique ID for blocked entry
+    };
+    blockedAttempts.unshift(blockedEntry);
+    writeDataFile(blockedAttemptsPath, blockedAttempts);
+    
+    // Broadcast the update
+    broadcastUpdate({
+      whitelistUpdate: whitelistedDevices,
+      newBlockedAttempt: blockedEntry,
+      newLog: logEntry
+    });
+    
+    res.json({ message: 'Device removed from whitelist successfully' });
+  } catch (error) {
+    console.error('Error removing device from whitelist:', error);
+    res.status(500).json({ error: 'Failed to remove device from whitelist' });
+  }
+});
+
+// WebSocket connection handling
+wss.on('connection', (ws) => {
+  console.log('Client connected to WebSocket');
+  
+  ws.on('close', () => {
+    console.log('Client disconnected from WebSocket');
+  });
+});
+
+// Initialize USB detection
+const initUsbDetection = () => {
+  usbDetect.startMonitoring();
+  
+  // Handle device add event
+  usbDetect.on('add', (device) => {
+    console.log('USB device connected:', device);
+    
+    const { vendorId, productId } = device;
+    const whitelistedDevices = readDataFile(whitelistPath);
+    
+    // Check if device is whitelisted
+    const isWhitelisted = whitelistedDevices.some(
+      (d) => d.vendorId === String(vendorId) && d.productId === String(productId)
+    );
+    
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      vendorId: String(vendorId),
+      productId: String(productId),
+      manufacturer: device.manufacturer || 'Unknown',
+      username: 'system',
+      date: new Date().toISOString(),
       id: Date.now(),
-      ...usbDevice,
-      status: "blocked"
+      status: isWhitelisted ? 'allowed' : 'blocked',
+      action: isWhitelisted ? 'Device access allowed' : 'Device access blocked'
     };
     
-    const blockedAttempts = readData(blockedAttemptsFile);
-    blockedAttempts.unshift(blockedEntry);
-    writeData(blockedAttemptsFile, blockedAttempts);
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
     
-    // Broadcast blocked attempt
-    broadcast({ newBlockedAttempt: blockedEntry });
-  }
+    // If device is not in whitelist, add to blocked attempts
+    if (!isWhitelisted) {
+      const blockedAttempts = readDataFile(blockedAttemptsPath);
+      const blockedEntry = {
+        ...logEntry,
+        id: Date.now() // Ensure unique ID
+      };
+      
+      blockedAttempts.unshift(blockedEntry);
+      writeDataFile(blockedAttemptsPath, blockedAttempts);
+      
+      // Broadcast the blocked attempt
+      broadcastUpdate({
+        newBlockedAttempt: blockedEntry,
+        newLog: logEntry
+      });
+    } else {
+      // Broadcast the log
+      broadcastUpdate({
+        newLog: logEntry
+      });
+    }
+  });
   
-  // Broadcast log
-  broadcast({ newLog: logEntry });
-});
-
-// Handle USB remove events
-usbDetect.on('remove', device => {
-  console.log('USB device disconnected:', device);
-  
-  // Convert device data to our format
-  const usbDevice = {
-    productId: `0x${device.productId.toString(16)}`,
-    vendorId: `0x${device.vendorId.toString(16)}`,
-    manufacturer: device.manufacturer || 'Unknown',
-    username: process.env.USER || 'system',
-    date: new Date().toISOString(),
-    time: new Date().toLocaleTimeString()
-  };
-  
-  // Create log entry
-  const logEntry = {
-    id: Date.now(),
-    ...usbDevice,
-    status: "info",
-    action: "disconnected"
-  };
-  
-  // Add to logs
-  const logs = readData(logsFile);
-  logs.unshift(logEntry);
-  writeData(logsFile, logs);
-  
-  // Broadcast log
-  broadcast({ newLog: logEntry });
-});
+  // Handle device remove event
+  usbDetect.on('remove', (device) => {
+    console.log('USB device disconnected:', device);
+    
+    const { vendorId, productId } = device;
+    
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      vendorId: String(vendorId),
+      productId: String(productId),
+      manufacturer: device.manufacturer || 'Unknown',
+      username: 'system',
+      date: new Date().toISOString(),
+      id: Date.now(),
+      status: 'info',
+      action: 'Device disconnected'
+    };
+    
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    
+    // Broadcast the log
+    broadcastUpdate({
+      newLog: logEntry
+    });
+  });
+};
 
 // Start the server
-const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+server.listen(port, () => {
+  console.log(`USB Monitor backend server running on http://localhost:${port}`);
+  initUsbDetection();
+});
+
+// Cleanup when the application is terminated
+process.on('SIGINT', () => {
+  usbDetect.stopMonitoring();
+  console.log('USB monitoring stopped');
+  process.exit();
 });
