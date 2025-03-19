@@ -1,14 +1,22 @@
 
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Shield, List, Plus, Database, Check, X, Filter, Ban } from "lucide-react";
+import { Shield, List, Plus, Database, Check, X, Filter, Ban, Settings } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { fetchUSBDevices, monitorUSBPorts, addDeviceToWhitelist, removeDeviceFromWhitelist } from "@/lib/usb-service";
+import { Checkbox } from "@/components/ui/checkbox";
+import { 
+  fetchUSBDevices, 
+  monitorUSBPorts, 
+  addDeviceToWhitelist, 
+  removeDeviceFromWhitelist,
+  fetchAllowedDeviceClasses,
+  updateAllowedDeviceClasses
+} from "@/lib/usb-service";
 
 const Dashboard = () => {
   const { toast } = useToast();
@@ -16,6 +24,7 @@ const Dashboard = () => {
   const [showBlockedAttempts, setShowBlockedAttempts] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [showAddDeviceModal, setShowAddDeviceModal] = useState(false);
+  const [showClassSettingsModal, setShowClassSettingsModal] = useState(false);
   
   const [statusFilter, setStatusFilter] = useState("all");
   const [usernameFilter, setUsernameFilter] = useState("");
@@ -23,6 +32,7 @@ const Dashboard = () => {
   const [whitelistedDevices, setWhitelistedDevices] = useState([]);
   const [blockedAttempts, setBlockedAttempts] = useState([]);
   const [logs, setLogs] = useState([]);
+  const [allowedClasses, setAllowedClasses] = useState([]);
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(new Date());
 
@@ -33,6 +43,30 @@ const Dashboard = () => {
     username: ""
   });
 
+  // Standard USB Device Classes for reference
+  const deviceClassesList = [
+    { id: "00", name: "Device", description: "Unspecified device" },
+    { id: "01", name: "Audio", description: "Audio devices" },
+    { id: "02", name: "CDC Control", description: "Communication devices" },
+    { id: "03", name: "HID (Human Interface Device)", description: "Keyboards, mice, etc." },
+    { id: "05", name: "Physical", description: "Physical devices" },
+    { id: "06", name: "Image", description: "Still imaging devices" },
+    { id: "07", name: "Printer", description: "Printers" },
+    { id: "08", name: "Mass Storage", description: "Mass storage devices" },
+    { id: "09", name: "Hub", description: "USB hubs" },
+    { id: "0A", name: "CDC Data", description: "CDC data devices" },
+    { id: "0B", name: "Smart Card", description: "Smart card devices" },
+    { id: "0D", name: "Content Security", description: "Content security devices" },
+    { id: "0E", name: "Video", description: "Video devices (webcams)" },
+    { id: "0F", name: "Personal Healthcare", description: "Healthcare devices" },
+    { id: "10", name: "Audio/Video", description: "Audio-video devices" },
+    { id: "DC", name: "Diagnostic", description: "Diagnostic devices" },
+    { id: "E0", name: "Wireless Controller", description: "Wireless controllers" },
+    { id: "EF", name: "Miscellaneous", description: "Miscellaneous devices" },
+    { id: "FE", name: "Application Specific", description: "Application specific devices" },
+    { id: "FF", name: "Vendor Specific", description: "Vendor specific devices" }
+  ];
+
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -40,6 +74,7 @@ const Dashboard = () => {
         setWhitelistedDevices(data.whitelistedDevices || []);
         setBlockedAttempts(data.blockedAttempts || []);
         setLogs(data.logs || []);
+        setAllowedClasses(data.allowedClasses || []);
         setLastUpdated(new Date());
       } catch (error) {
         console.error("Error fetching USB devices:", error);
@@ -71,6 +106,10 @@ const Dashboard = () => {
           
           if (newData.whitelistUpdate) {
             setWhitelistedDevices(newData.whitelistUpdate);
+          }
+          
+          if (newData.allowedClassesUpdate) {
+            setAllowedClasses(newData.allowedClassesUpdate);
           }
           
           setLastUpdated(new Date());
@@ -190,7 +229,7 @@ const Dashboard = () => {
       
       toast({
         title: "Success!",
-        description: "Device removed from whitelist successfully",
+        description: "Device removed from whitelist and blocked successfully",
         variant: "default",
       });
     } catch (error) {
@@ -198,6 +237,46 @@ const Dashboard = () => {
       toast({
         title: "Error",
         description: "Failed to remove device from whitelist",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleToggleDeviceClass = async (classId) => {
+    try {
+      // Check if class is already allowed
+      const isAllowed = allowedClasses.some(c => c.id === classId);
+      let updatedClasses;
+      
+      if (isAllowed) {
+        // Remove from allowed classes
+        updatedClasses = allowedClasses.filter(c => c.id !== classId);
+      } else {
+        // Add to allowed classes
+        const classToAdd = deviceClassesList.find(c => c.id === classId);
+        if (classToAdd) {
+          updatedClasses = [...allowedClasses, classToAdd];
+        } else {
+          updatedClasses = [...allowedClasses];
+        }
+      }
+      
+      // Update allowed classes in backend
+      await updateAllowedDeviceClasses(updatedClasses);
+      
+      // Update local state
+      setAllowedClasses(updatedClasses);
+      
+      toast({
+        title: "Success!",
+        description: `Device class ${isAllowed ? 'blocked' : 'allowed'} successfully`,
+        variant: "default",
+      });
+    } catch (error) {
+      console.error("Error updating allowed device classes:", error);
+      toast({
+        title: "Error",
+        description: "Failed to update allowed device classes",
         variant: "destructive",
       });
     }
@@ -239,6 +318,12 @@ const Dashboard = () => {
     return true;
   });
 
+  const getDeviceClassInfo = (classId) => {
+    if (!classId) return "Unknown";
+    const classInfo = deviceClassesList.find(c => c.id.toLowerCase() === classId.toLowerCase());
+    return classInfo ? classInfo.name : classId;
+  };
+
   return (
     <div className="p-8 max-w-7xl mx-auto">
       <div className="flex justify-between items-center mb-8">
@@ -250,13 +335,22 @@ const Dashboard = () => {
               "Monitoring Inactive"} | Last Updated: {lastUpdated.toLocaleTimeString()}
           </p>
         </div>
-        <Button 
-          onClick={() => setShowAddDeviceModal(true)}
-          className="inline-flex items-center px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
-        >
-          <Plus className="w-5 h-5 mr-2" />
-          Add Device
-        </Button>
+        <div className="flex gap-2">
+          <Button 
+            onClick={() => setShowClassSettingsModal(true)}
+            className="inline-flex items-center px-4 py-2 bg-secondary text-white rounded-lg hover:bg-secondary/90 transition-colors"
+          >
+            <Settings className="w-5 h-5 mr-2" />
+            Device Classes
+          </Button>
+          <Button 
+            onClick={() => setShowAddDeviceModal(true)}
+            className="inline-flex items-center px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
+          >
+            <Plus className="w-5 h-5 mr-2" />
+            Add Device
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
@@ -312,6 +406,7 @@ const Dashboard = () => {
                       <TableHead>Vendor ID</TableHead>
                       <TableHead>Manufacturer</TableHead>
                       <TableHead>Username</TableHead>
+                      <TableHead>Class</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Actions</TableHead>
                     </TableRow>
@@ -324,6 +419,7 @@ const Dashboard = () => {
                           <TableCell>{device.vendorId}</TableCell>
                           <TableCell>{device.manufacturer}</TableCell>
                           <TableCell>{device.username}</TableCell>
+                          <TableCell>{getDeviceClassInfo(device.deviceClass)}</TableCell>
                           <TableCell>
                             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
                               <Check className="w-3 h-3 mr-1" />
@@ -345,7 +441,7 @@ const Dashboard = () => {
                       ))
                     ) : (
                       <TableRow>
-                        <TableCell colSpan={6} className="text-center py-4 text-gray-500">
+                        <TableCell colSpan={7} className="text-center py-4 text-gray-500">
                           No whitelisted devices found
                         </TableCell>
                       </TableRow>
@@ -368,7 +464,7 @@ const Dashboard = () => {
                       <TableHead>Product ID</TableHead>
                       <TableHead>Vendor ID</TableHead>
                       <TableHead>Manufacturer</TableHead>
-                      <TableHead>Username</TableHead>
+                      <TableHead>Class</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Action</TableHead>
                     </TableRow>
@@ -382,7 +478,7 @@ const Dashboard = () => {
                           <TableCell>{device.productId}</TableCell>
                           <TableCell>{device.vendorId}</TableCell>
                           <TableCell>{device.manufacturer}</TableCell>
-                          <TableCell>{device.username}</TableCell>
+                          <TableCell>{getDeviceClassInfo(device.deviceClass)}</TableCell>
                           <TableCell>
                             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
                               <X className="w-3 h-3 mr-1" />
@@ -455,7 +551,7 @@ const Dashboard = () => {
                       <TableHead>Product ID</TableHead>
                       <TableHead>Vendor ID</TableHead>
                       <TableHead>Manufacturer</TableHead>
-                      <TableHead>Username</TableHead>
+                      <TableHead>Class</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Action</TableHead>
                     </TableRow>
@@ -469,12 +565,16 @@ const Dashboard = () => {
                           <TableCell>{log.productId}</TableCell>
                           <TableCell>{log.vendorId}</TableCell>
                           <TableCell>{log.manufacturer}</TableCell>
-                          <TableCell>{log.username}</TableCell>
+                          <TableCell>{getDeviceClassInfo(log.deviceClass)}</TableCell>
                           <TableCell>
                             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                              log.status === "allowed" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                              log.status === "allowed" ? "bg-green-100 text-green-800" : 
+                              log.status === "blocked" ? "bg-red-100 text-red-800" : 
+                              "bg-gray-100 text-gray-800"
                             }`}>
-                              {log.status === "allowed" ? <Check className="w-3 h-3 mr-1" /> : <X className="w-3 h-3 mr-1" />}
+                              {log.status === "allowed" ? <Check className="w-3 h-3 mr-1" /> : 
+                               log.status === "blocked" ? <X className="w-3 h-3 mr-1" /> : 
+                               null}
                               {log.status}
                             </span>
                           </TableCell>
@@ -528,6 +628,16 @@ const Dashboard = () => {
               <div>
                 <h3 className="font-medium">Manage Whitelist</h3>
                 <p className="text-sm text-gray-600">Add or remove USB devices</p>
+              </div>
+            </div>
+            <div
+              onClick={() => setShowClassSettingsModal(true)}
+              className="flex items-center p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer"
+            >
+              <Settings className="w-6 h-6 text-primary mr-3" />
+              <div>
+                <h3 className="font-medium">Device Class Settings</h3>
+                <p className="text-sm text-gray-600">Configure allowed USB device classes</p>
               </div>
             </div>
             <div className="mt-6">
@@ -620,6 +730,49 @@ const Dashboard = () => {
               Cancel
             </Button>
             <Button onClick={handleAddDevice}>Add Device</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showClassSettingsModal} onOpenChange={setShowClassSettingsModal}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Configure Device Class Settings</DialogTitle>
+            <DialogDescription>
+              Select which USB device classes should be allowed on your system.
+              Human interface devices like keyboards and mice, webcams, and audio devices are recommended to be allowed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4 max-h-[60vh] overflow-y-auto">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {deviceClassesList.map((deviceClass) => {
+                const isAllowed = allowedClasses.some(c => c.id === deviceClass.id);
+                return (
+                  <div 
+                    key={deviceClass.id}
+                    className={`p-4 border rounded-lg ${isAllowed ? 'border-green-200 bg-green-50' : 'border-gray-200'}`}
+                  >
+                    <div className="flex items-center space-x-2">
+                      <Checkbox 
+                        id={`class-${deviceClass.id}`}
+                        checked={isAllowed}
+                        onCheckedChange={() => handleToggleDeviceClass(deviceClass.id)}
+                      />
+                      <label
+                        htmlFor={`class-${deviceClass.id}`}
+                        className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                      >
+                        {deviceClass.name} (Class {deviceClass.id})
+                      </label>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1 ml-6">{deviceClass.description}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setShowClassSettingsModal(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

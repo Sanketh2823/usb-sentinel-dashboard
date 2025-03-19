@@ -6,6 +6,8 @@ const path = require('path');
 const WebSocket = require('ws');
 const http = require('http');
 const usbDetect = require("usb-detection");
+const { exec } = require('child_process');
+const os = require('os');
 
 const app = express();
 const port = 3001;
@@ -25,6 +27,7 @@ const dataDir = path.join(__dirname, 'data');
 const whitelistPath = path.join(dataDir, 'whitelist.json');
 const blockedAttemptsPath = path.join(dataDir, 'blocked-attempts.json');
 const logsPath = path.join(dataDir, 'logs.json');
+const allowedClassesPath = path.join(dataDir, 'allowed-classes.json');
 
 // Create data directory if it doesn't exist
 if (!fs.existsSync(dataDir)) {
@@ -43,6 +46,16 @@ const initializeDataFiles = () => {
   
   if (!fs.existsSync(logsPath)) {
     fs.writeFileSync(logsPath, JSON.stringify([]));
+  }
+
+  if (!fs.existsSync(allowedClassesPath)) {
+    // Default allowed device classes: keyboard (03), mouse (02), webcam/video (0e)
+    fs.writeFileSync(allowedClassesPath, JSON.stringify([
+      { id: "03", name: "HID (Human Interface Device)", description: "Keyboards, mice, etc." },
+      { id: "02", name: "CDC Control", description: "Communication devices" },
+      { id: "0e", name: "Video", description: "Webcams" },
+      { id: "01", name: "Audio", description: "Audio devices" }
+    ]));
   }
 };
 
@@ -69,6 +82,129 @@ const writeDataFile = (filePath, data) => {
   }
 };
 
+// Function to get device class information
+const getDeviceClass = async (vendorId, productId) => {
+  return new Promise((resolve) => {
+    let deviceClass = "FF"; // Default to "unknown" class
+    
+    // Different commands for different platforms
+    let command;
+    const platform = os.platform();
+    
+    if (platform === 'win32') {
+      // Windows - using PowerShell to query device class
+      command = `powershell "Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorId}&PID_${productId}*' } | Select-Object -ExpandProperty Class"`;
+    } else if (platform === 'darwin') {
+      // macOS - using system_profiler to get USB device info
+      command = `system_profiler SPUSBDataType | grep -A 20 "Vendor ID: 0x${vendorId}" | grep -A 15 "Product ID: 0x${productId}" | grep "Class:"`;
+    } else {
+      // Linux - using lsusb to get USB device info
+      command = `lsusb -d ${vendorId}:${productId} -v | grep bDeviceClass`;
+    }
+    
+    // Execute command to get device class
+    exec(command, (error, stdout, stderr) => {
+      if (!error && stdout) {
+        try {
+          if (platform === 'win32') {
+            // Parse Windows output
+            deviceClass = stdout.trim();
+            
+            // Map Windows device class names to USB class codes
+            const windowsClassMap = {
+              "Keyboard": "03",
+              "Mouse": "03",
+              "HIDClass": "03",
+              "USBDevice": "00",
+              "Camera": "0e",
+              "WebCam": "0e",
+              "AudioEndpoint": "01",
+              "Media": "01"
+            };
+            
+            for (const [key, value] of Object.entries(windowsClassMap)) {
+              if (deviceClass.includes(key)) {
+                deviceClass = value;
+                break;
+              }
+            }
+          } else if (platform === 'darwin') {
+            // Parse macOS output
+            const match = stdout.match(/Class: (.+)/);
+            if (match && match[1]) {
+              deviceClass = match[1].trim();
+              
+              // Map macOS class names to USB class codes
+              const macClassMap = {
+                "HID": "03",
+                "Video": "0e",
+                "Audio": "01"
+              };
+              
+              for (const [key, value] of Object.entries(macClassMap)) {
+                if (deviceClass.includes(key)) {
+                  deviceClass = value;
+                  break;
+                }
+              }
+            }
+          } else {
+            // Parse Linux output
+            const match = stdout.match(/bDeviceClass\s+(\w+)/);
+            if (match && match[1]) {
+              deviceClass = match[1].trim();
+            }
+          }
+        } catch (parseError) {
+          console.error("Error parsing device class:", parseError);
+        }
+      }
+      
+      resolve(deviceClass);
+    });
+  });
+};
+
+// Function to block a USB device
+const blockUSBDevice = async (vendorId, productId) => {
+  const platform = os.platform();
+  
+  if (platform === 'win32') {
+    // Windows - using PnPUtil to disable device
+    const command = `powershell "Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorId}&PID_${productId}*' } | Disable-PnpDevice -Confirm:$false"`;
+    exec(command, (error, stdout, stderr) => {
+      if (error) {
+        console.error(`Error blocking device on Windows: ${error.message}`);
+        return false;
+      }
+      return true;
+    });
+  } else if (platform === 'darwin') {
+    // macOS - using AppleScript to simulate eject or using system commands
+    const command = `diskutil unmount \`diskutil list | grep -i "$(system_profiler SPUSBDataType | grep -A 20 "Vendor ID: 0x${vendorId}" | grep -A 15 "Product ID: 0x${productId}" | grep -A 5 "BSD Name:" | head -n 1 | awk '{print $3}')\``;
+    exec(command, (error, stdout, stderr) => {
+      if (error) {
+        console.error(`Error blocking device on macOS: ${error.message}`);
+        return false;
+      }
+      return true;
+    });
+  } else {
+    // Linux - using USB authorization or udev rules
+    // This requires root privileges
+    const command = `echo 0 > /sys/bus/usb/devices/$(lsusb -d ${vendorId}:${productId} | cut -d: -f1 | cut -d' ' -f2)-$(lsusb -d ${vendorId}:${productId} | cut -d: -f2 | cut -d' ' -f1)/authorized`;
+    exec(command, (error, stdout, stderr) => {
+      if (error) {
+        console.error(`Error blocking device on Linux: ${error.message}`);
+        return false;
+      }
+      return true;
+    });
+  }
+  
+  return true;
+};
+
 // Broadcast updates to all connected clients
 const broadcastUpdate = (data) => {
   wss.clients.forEach((client) => {
@@ -84,15 +220,46 @@ app.get('/api/usb-devices', (req, res) => {
     const whitelistedDevices = readDataFile(whitelistPath);
     const blockedAttempts = readDataFile(blockedAttemptsPath);
     const logs = readDataFile(logsPath);
+    const allowedClasses = readDataFile(allowedClassesPath);
     
     res.json({
       whitelistedDevices,
       blockedAttempts,
-      logs
+      logs,
+      allowedClasses
     });
   } catch (error) {
     console.error('Error retrieving USB devices:', error);
     res.status(500).json({ error: 'Failed to retrieve USB devices' });
+  }
+});
+
+// Get allowed device classes
+app.get('/api/allowed-classes', (req, res) => {
+  try {
+    const allowedClasses = readDataFile(allowedClassesPath);
+    res.json(allowedClasses);
+  } catch (error) {
+    console.error('Error retrieving allowed classes:', error);
+    res.status(500).json({ error: 'Failed to retrieve allowed classes' });
+  }
+});
+
+// Update allowed device classes
+app.post('/api/allowed-classes', (req, res) => {
+  try {
+    const allowedClasses = req.body;
+    writeDataFile(allowedClassesPath, allowedClasses);
+    
+    // Broadcast update
+    broadcastUpdate({
+      allowedClassesUpdate: allowedClasses
+    });
+    
+    res.json({ success: true, message: 'Allowed classes updated successfully' });
+  } catch (error) {
+    console.error('Error updating allowed classes:', error);
+    res.status(500).json({ error: 'Failed to update allowed classes' });
   }
 });
 
@@ -176,6 +343,9 @@ app.delete('/api/whitelist/:id', (req, res) => {
     blockedAttempts.unshift(blockedEntry);
     writeDataFile(blockedAttemptsPath, blockedAttempts);
     
+    // Try to actually block the device
+    blockUSBDevice(deviceToRemove.vendorId, deviceToRemove.productId);
+    
     // Broadcast the update
     broadcastUpdate({
       whitelistUpdate: whitelistedDevices,
@@ -183,7 +353,7 @@ app.delete('/api/whitelist/:id', (req, res) => {
       newLog: logEntry
     });
     
-    res.json({ message: 'Device removed from whitelist successfully' });
+    res.json({ message: 'Device removed from whitelist and blocked successfully' });
   } catch (error) {
     console.error('Error removing device from whitelist:', error);
     res.status(500).json({ error: 'Failed to remove device from whitelist' });
@@ -204,16 +374,28 @@ const initUsbDetection = () => {
   usbDetect.startMonitoring();
   
   // Handle device add event
-  usbDetect.on('add', (device) => {
+  usbDetect.on('add', async (device) => {
     console.log('USB device connected:', device);
     
     const { vendorId, productId } = device;
     const whitelistedDevices = readDataFile(whitelistPath);
+    const allowedClasses = readDataFile(allowedClassesPath);
+    
+    // Get device class information
+    const deviceClass = await getDeviceClass(vendorId, productId);
+    console.log(`Device class for ${vendorId}:${productId} is ${deviceClass}`);
+    
+    // Check if device class is allowed
+    const isClassAllowed = allowedClasses.some(c => c.id.toLowerCase() === deviceClass.toLowerCase());
+    console.log(`Device class ${deviceClass} is ${isClassAllowed ? 'allowed' : 'not allowed'}`);
     
     // Check if device is whitelisted
     const isWhitelisted = whitelistedDevices.some(
       (d) => d.vendorId === String(vendorId) && d.productId === String(productId)
     );
+    
+    // Device is allowed if it's whitelisted or its class is allowed
+    const isAllowed = isWhitelisted || isClassAllowed;
     
     const logs = readDataFile(logsPath);
     const logEntry = {
@@ -223,23 +405,30 @@ const initUsbDetection = () => {
       username: 'system',
       date: new Date().toISOString(),
       id: Date.now(),
-      status: isWhitelisted ? 'allowed' : 'blocked',
-      action: isWhitelisted ? 'Device access allowed' : 'Device access blocked'
+      deviceClass,
+      status: isAllowed ? 'allowed' : 'blocked',
+      action: isAllowed ? 
+        (isWhitelisted ? 'Device access allowed (whitelisted)' : 'Device access allowed (class allowed)') : 
+        'Device access blocked'
     };
     
     logs.unshift(logEntry);
     writeDataFile(logsPath, logs);
     
-    // If device is not in whitelist, add to blocked attempts
-    if (!isWhitelisted) {
+    // If device is not allowed, add to blocked attempts and actually block it
+    if (!isAllowed) {
       const blockedAttempts = readDataFile(blockedAttemptsPath);
       const blockedEntry = {
         ...logEntry,
-        id: Date.now() // Ensure unique ID
+        id: Date.now(), // Ensure unique ID
+        deviceClass
       };
       
       blockedAttempts.unshift(blockedEntry);
       writeDataFile(blockedAttemptsPath, blockedAttempts);
+      
+      // Actually block the device
+      blockUSBDevice(vendorId, productId);
       
       // Broadcast the blocked attempt
       broadcastUpdate({
@@ -294,3 +483,4 @@ process.on('SIGINT', () => {
   console.log('USB monitoring stopped');
   process.exit();
 });
+

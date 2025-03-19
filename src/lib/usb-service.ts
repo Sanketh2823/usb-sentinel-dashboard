@@ -58,6 +58,41 @@ export const removeDeviceFromWhitelist = async (deviceId) => {
   }
 };
 
+export const fetchAllowedDeviceClasses = async () => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/allowed-classes`);
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Error fetching allowed device classes:", error);
+    throw new Error("Failed to fetch allowed device classes");
+  }
+};
+
+export const updateAllowedDeviceClasses = async (allowedClasses) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/allowed-classes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(allowedClasses)
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Error updating allowed device classes:", error);
+    throw new Error("Failed to update allowed device classes");
+  }
+};
+
 // Real-time monitoring using WebSocket
 export const monitorUSBPorts = async (callback) => {
   const socket = new WebSocket(`ws://localhost:3001/usb-events`);
