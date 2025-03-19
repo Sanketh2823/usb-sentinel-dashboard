@@ -1,4 +1,3 @@
-
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
@@ -205,6 +204,62 @@ const blockUSBDevice = async (vendorId, productId) => {
   return true;
 };
 
+// New function to eject a USB device
+const ejectUSBDevice = async (vendorId, productId, platform) => {
+  let command;
+  
+  if (platform === 'win32') {
+    // Windows - using PowerShell to eject device
+    command = `powershell "$driveEject = New-Object -comObject Shell.Application; $driveEject.Namespace(17).ParseName((Get-WmiObject Win32_DiskDrive | Where-Object { $_.PNPDeviceID -like '*VID_${vendorId}&PID_${productId}*' } | Get-WmiObject -Query 'ASSOCIATORS OF {$_.} WHERE ResultClass=Win32_DiskPartition' | ForEach-Object { Get-WmiObject -Query 'ASSOCIATORS OF {$_.} WHERE ResultClass=Win32_LogicalDisk' } | Select-Object -First 1 DeviceID).DeviceID).InvokeVerb('Eject')"`;
+  } else if (platform === 'darwin') {
+    // macOS - using diskutil to eject
+    command = `diskutil eject $(system_profiler SPUSBDataType | grep -A 20 "Vendor ID: 0x${vendorId}" | grep -A 15 "Product ID: 0x${productId}" | grep -A 5 "BSD Name:" | head -n 1 | awk '{print $3}')`;
+  } else {
+    // Linux - using udisks to eject
+    command = `udisksctl unmount -b /dev/$(lsblk -o NAME,VENDOR,MODEL | grep -i "${vendorId}.*${productId}" | awk '{print $1}' | head -n 1)`;
+  }
+
+  return new Promise((resolve) => {
+    exec(command, (error, stdout, stderr) => {
+      if (error) {
+        console.error(`Error ejecting device on ${platform}: ${error.message}`);
+        resolve({ success: false, message: `Error ejecting device: ${error.message}` });
+      } else {
+        console.log(`Successfully ejected device on ${platform}`);
+        resolve({ success: true, message: 'Device ejected successfully' });
+      }
+    });
+  });
+};
+
+// New function to refresh USB devices
+const refreshUSBDevices = async (platform) => {
+  let command;
+  
+  if (platform === 'win32') {
+    // Windows - using PowerShell to rescan USB devices
+    command = `powershell "Restart-Service -Name 'USBSTOR' -Force"`;
+  } else if (platform === 'darwin') {
+    // macOS - restart IOUSBFamily service (requires admin)
+    command = `sudo kextunload -b com.apple.iokit.IOUSBFamily && sudo kextload -b com.apple.iokit.IOUSBFamily`;
+  } else {
+    // Linux - using udevadm to trigger USB events
+    command = `udevadm trigger && udevadm settle`;
+  }
+
+  return new Promise((resolve) => {
+    exec(command, (error, stdout, stderr) => {
+      if (error) {
+        console.error(`Error refreshing USB devices on ${platform}: ${error.message}`);
+        resolve({ success: false, message: `Error refreshing USB devices: ${error.message}` });
+      } else {
+        console.log(`Successfully refreshed USB devices on ${platform}`);
+        resolve({ success: true, message: 'USB devices refreshed successfully' });
+      }
+    });
+  });
+};
+
 // Broadcast updates to all connected clients
 const broadcastUpdate = (data) => {
   wss.clients.forEach((client) => {
@@ -360,6 +415,110 @@ app.delete('/api/whitelist/:id', (req, res) => {
   }
 });
 
+// New endpoint to get system info
+app.get('/api/system-info', (req, res) => {
+  try {
+    const systemInfo = {
+      platform: os.platform(),
+      arch: os.arch(),
+      hostname: os.hostname(),
+      type: os.type(),
+      release: os.release()
+    };
+    
+    res.json(systemInfo);
+  } catch (error) {
+    console.error('Error retrieving system info:', error);
+    res.status(500).json({ error: 'Failed to retrieve system info' });
+  }
+});
+
+// New endpoint to eject a USB device
+app.post('/api/eject-device/:id', async (req, res) => {
+  try {
+    const deviceId = parseInt(req.params.id);
+    const { platform } = req.body;
+    
+    // Find the device in whitelist or blocked attempts
+    const whitelistedDevices = readDataFile(whitelistPath);
+    const blockedAttempts = readDataFile(blockedAttemptsPath);
+    
+    let device = whitelistedDevices.find(d => d.id === deviceId);
+    if (!device) {
+      device = blockedAttempts.find(d => d.id === deviceId);
+    }
+    
+    if (!device) {
+      return res.status(404).json({ error: 'Device not found' });
+    }
+    
+    // Eject the device
+    const result = await ejectUSBDevice(device.vendorId, device.productId, platform);
+    
+    // Log the action
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      ...device,
+      action: 'Device ejection attempted',
+      status: result.success ? 'info' : 'error',
+      id: Date.now(),
+      date: new Date().toISOString()
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    
+    // Broadcast the log
+    broadcastUpdate({
+      newLog: logEntry
+    });
+    
+    if (result.success) {
+      res.json({ success: true, message: 'Device ejected successfully' });
+    } else {
+      res.status(500).json({ success: false, message: result.message });
+    }
+  } catch (error) {
+    console.error('Error ejecting USB device:', error);
+    res.status(500).json({ error: 'Failed to eject USB device' });
+  }
+});
+
+// New endpoint to refresh USB devices
+app.post('/api/refresh-devices', async (req, res) => {
+  try {
+    const { platform } = req.body;
+    
+    // Refresh USB devices
+    const result = await refreshUSBDevices(platform);
+    
+    // Log the action
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      action: 'USB devices refresh attempted',
+      status: result.success ? 'info' : 'error',
+      id: Date.now(),
+      date: new Date().toISOString(),
+      username: 'system'
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    
+    // Broadcast the log
+    broadcastUpdate({
+      newLog: logEntry
+    });
+    
+    if (result.success) {
+      res.json({ success: true, message: 'USB devices refreshed successfully' });
+    } else {
+      res.status(500).json({ success: false, message: result.message });
+    }
+  } catch (error) {
+    console.error('Error refreshing USB devices:', error);
+    res.status(500).json({ error: 'Failed to refresh USB devices' });
+  }
+});
+
 // WebSocket connection handling
 wss.on('connection', (ws) => {
   console.log('Client connected to WebSocket');
@@ -483,4 +642,3 @@ process.on('SIGINT', () => {
   console.log('USB monitoring stopped');
   process.exit();
 });
-
