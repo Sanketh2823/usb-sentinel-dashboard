@@ -96,8 +96,18 @@ export const updateAllowedDeviceClasses = async (allowedClasses) => {
 // Function to manually eject a USB device
 export const ejectUSBDevice = async (deviceId) => {
   try {
+    // Get the operating system platform info from the backend
+    const platformResponse = await fetch(`${API_BASE_URL}/api/system-info`);
+    if (!platformResponse.ok) {
+      throw new Error(`HTTP error! Status: ${platformResponse.status}`);
+    }
+    const { platform } = await platformResponse.json();
+    
+    // Make the eject request with platform info
     const response = await fetch(`${API_BASE_URL}/api/eject-device/${deviceId}`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform })
     });
     
     if (!response.ok) {
@@ -115,8 +125,18 @@ export const ejectUSBDevice = async (deviceId) => {
 // Function to force refresh USB device list
 export const refreshUSBDevices = async () => {
   try {
+    // Get the operating system platform info from the backend
+    const platformResponse = await fetch(`${API_BASE_URL}/api/system-info`);
+    if (!platformResponse.ok) {
+      throw new Error(`HTTP error! Status: ${platformResponse.status}`);
+    }
+    const { platform } = await platformResponse.json();
+    
+    // Make the refresh request with platform info
     const response = await fetch(`${API_BASE_URL}/api/refresh-devices`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform })
     });
     
     if (!response.ok) {
