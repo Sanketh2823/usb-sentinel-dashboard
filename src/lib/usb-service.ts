@@ -93,6 +93,44 @@ export const updateAllowedDeviceClasses = async (allowedClasses) => {
   }
 };
 
+// Function to manually eject a USB device
+export const ejectUSBDevice = async (deviceId) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/eject-device/${deviceId}`, {
+      method: 'POST',
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Error ejecting USB device:", error);
+    throw new Error("Failed to eject USB device");
+  }
+};
+
+// Function to force refresh USB device list
+export const refreshUSBDevices = async () => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/refresh-devices`, {
+      method: 'POST',
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Error refreshing USB devices:", error);
+    throw new Error("Failed to refresh USB devices");
+  }
+};
+
 // Real-time monitoring using WebSocket
 export const monitorUSBPorts = async (callback) => {
   const socket = new WebSocket(`ws://localhost:3001/usb-events`);
