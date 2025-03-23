@@ -1,18 +1,27 @@
-
 // USB service for handling device data and monitoring
 
 // API endpoint URLs - update these with your actual backend server address
 const API_BASE_URL = "http://localhost:3001";
 
-// Function to convert hexadecimal IDs if needed
+// Function to convert hexadecimal IDs
 const normalizeHexId = (id) => {
-  // Check if the ID is already in the correct format
+  // Return empty string if no ID provided
   if (!id) return "";
   
-  // Remove any 0x prefix if present
+  // Convert to string if not already and remove any 0x prefix
   let normalizedId = id.toString().replace(/^0x/i, '');
   
-  // Ensure it's 4 digits by padding with leading zeros if needed
+  // Ensure correct format without modifying the original ID too much
+  // Some systems report IDs with actual values like 050ac
+  // We should preserve this format rather than forcing to 4 digits
+  
+  // If ID looks like system raw ID (no leading zeros trimmed by parseInt),
+  // return it directly without padding
+  if (normalizedId.length >= 4) {
+    return normalizedId;
+  }
+  
+  // Otherwise pad to at least 4 digits for standard format
   while (normalizedId.length < 4) {
     normalizedId = '0' + normalizedId;
   }
@@ -20,9 +29,15 @@ const normalizeHexId = (id) => {
   return normalizedId;
 };
 
+// Helper to log ID processing for debugging
+const logIdProcessing = (type, original, normalized) => {
+  console.log(`${type} ID conversion: Original=${original}, Normalized=${normalized}`);
+};
+
 // Real API calls to backend
 export const fetchUSBDevices = async () => {
   try {
+    console.log("Fetching USB devices from API...");
     const response = await fetch(`${API_BASE_URL}/api/usb-devices`);
     if (!response.ok) {
       throw new Error(`HTTP error! Status: ${response.status}`);
@@ -30,6 +45,14 @@ export const fetchUSBDevices = async () => {
     
     const data = await response.json();
     console.log("Fetched USB device data:", data);
+    
+    // Verify IDs are properly formatted in the response
+    if (data.whitelistedDevices && Array.isArray(data.whitelistedDevices)) {
+      data.whitelistedDevices.forEach(device => {
+        console.log(`Device from API: productId=${device.productId}, vendorId=${device.vendorId}`);
+      });
+    }
+    
     return data;
   } catch (error) {
     console.error("Error fetching USB devices:", error);
@@ -39,11 +62,24 @@ export const fetchUSBDevices = async () => {
 
 export const addDeviceToWhitelist = async (device) => {
   try {
+    // Log original values
+    console.log("Original device IDs:", {
+      productId: device.productId,
+      vendorId: device.vendorId
+    });
+    
     // Normalize product and vendor IDs before sending to backend
+    const normalizedProductId = normalizeHexId(device.productId);
+    const normalizedVendorId = normalizeHexId(device.vendorId);
+    
+    // Log the normalized values
+    logIdProcessing("Product", device.productId, normalizedProductId);
+    logIdProcessing("Vendor", device.vendorId, normalizedVendorId);
+    
     const normalizedDevice = {
       ...device,
-      productId: normalizeHexId(device.productId),
-      vendorId: normalizeHexId(device.vendorId)
+      productId: normalizedProductId,
+      vendorId: normalizedVendorId
     };
     
     console.log("Adding device to whitelist:", normalizedDevice);
@@ -208,28 +244,43 @@ export const monitorUSBPorts = async (callback) => {
         const data = JSON.parse(event.data);
         console.log("Received WebSocket data:", data);
         
+        // Log original values before normalization
+        if (data.newLog && data.newLog.vendorId) {
+          console.log(`WebSocket log original vendorId: ${data.newLog.vendorId}, productId: ${data.newLog.productId}`);
+        }
+        
+        // Log original values for blocked attempts
+        if (data.newBlockedAttempt && data.newBlockedAttempt.vendorId) {
+          console.log(`WebSocket blocked attempt original vendorId: ${data.newBlockedAttempt.vendorId}, productId: ${data.newBlockedAttempt.productId}`);
+        }
+        
         // Normalize IDs in received data if needed
         if (data.newLog && data.newLog.vendorId) {
-          data.newLog.vendorId = normalizeHexId(data.newLog.vendorId);
+          // Keep original value if it's already in correct format
+          data.newLog.vendorId = data.newLog.vendorId;
         }
         if (data.newLog && data.newLog.productId) {
-          data.newLog.productId = normalizeHexId(data.newLog.productId);
+          // Keep original value if it's already in correct format
+          data.newLog.productId = data.newLog.productId;
         }
         
         if (data.newBlockedAttempt && data.newBlockedAttempt.vendorId) {
-          data.newBlockedAttempt.vendorId = normalizeHexId(data.newBlockedAttempt.vendorId);
+          // Keep original value if it's already in correct format
+          data.newBlockedAttempt.vendorId = data.newBlockedAttempt.vendorId;
         }
         if (data.newBlockedAttempt && data.newBlockedAttempt.productId) {
-          data.newBlockedAttempt.productId = normalizeHexId(data.newBlockedAttempt.productId);
+          // Keep original value if it's already in correct format
+          data.newBlockedAttempt.productId = data.newBlockedAttempt.productId;
         }
         
         // Fix whitelist update data if present
         if (data.whitelistUpdate) {
-          data.whitelistUpdate = data.whitelistUpdate.map(device => ({
-            ...device,
-            vendorId: normalizeHexId(device.vendorId),
-            productId: normalizeHexId(device.productId)
-          }));
+          console.log("Original whitelist update data:", JSON.stringify(data.whitelistUpdate));
+          
+          // Keep original values as they should already be correct from the server
+          data.whitelistUpdate = data.whitelistUpdate;
+          
+          console.log("Normalized whitelist update data:", JSON.stringify(data.whitelistUpdate));
         }
         
         callback(data);
