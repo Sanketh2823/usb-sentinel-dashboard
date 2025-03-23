@@ -10,7 +10,6 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { fetchUSBDevices, monitorUSBPorts, addDeviceToWhitelist, removeDeviceFromWhitelist, fetchAllowedDeviceClasses, updateAllowedDeviceClasses } from "@/lib/usb-service";
-
 const Dashboard = () => {
   const {
     toast
@@ -34,7 +33,6 @@ const Dashboard = () => {
     manufacturer: "",
     username: ""
   });
-
   const deviceClassesList = [{
     id: "00",
     name: "Device",
@@ -116,7 +114,6 @@ const Dashboard = () => {
     name: "Vendor Specific",
     description: "Vendor specific devices"
   }];
-
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -137,7 +134,6 @@ const Dashboard = () => {
     };
     fetchData();
   }, [toast]);
-
   useEffect(() => {
     let monitoringSubscription;
     const startMonitoring = async () => {
@@ -183,7 +179,6 @@ const Dashboard = () => {
       setIsMonitoring(false);
     };
   }, [toast]);
-
   const handleInputChange = e => {
     const {
       name,
@@ -194,7 +189,6 @@ const Dashboard = () => {
       [name]: value
     }));
   };
-
   const handleAddDevice = async () => {
     try {
       await addDeviceToWhitelist(newDevice);
@@ -224,7 +218,6 @@ const Dashboard = () => {
       });
     }
   };
-
   const handleAddToWhitelist = async device => {
     try {
       await addDeviceToWhitelist(device);
@@ -247,7 +240,6 @@ const Dashboard = () => {
       });
     }
   };
-
   const handleBlockDevice = async deviceId => {
     try {
       await removeDeviceFromWhitelist(deviceId);
@@ -266,7 +258,6 @@ const Dashboard = () => {
       });
     }
   };
-
   const handleToggleDeviceClass = async classId => {
     try {
       const isAllowed = allowedClasses.some(c => c.id === classId);
@@ -297,7 +288,6 @@ const Dashboard = () => {
       });
     }
   };
-
   const stats = [{
     title: "Total USB Events",
     value: logs.length.toString(),
@@ -317,7 +307,6 @@ const Dashboard = () => {
     change: `${whitelistedDevices.length} devices`,
     changeType: "positive"
   }];
-
   const filteredLogs = logs.filter(log => {
     if (statusFilter !== "all" && log.status !== statusFilter) {
       return false;
@@ -327,13 +316,11 @@ const Dashboard = () => {
     }
     return true;
   });
-
   const getDeviceClassInfo = classId => {
     if (!classId) return "Unknown";
     const classInfo = deviceClassesList.find(c => c.id.toLowerCase() === classId.toLowerCase());
     return classInfo ? classInfo.name : classId;
   };
-
   return <div className="p-8 max-w-7xl mx-auto">
       <div className="flex justify-between items-center mb-8">
         <div>
@@ -354,17 +341,7 @@ const Dashboard = () => {
         </div>
       </div>
 
-      <Alert className="mb-6 border-amber-300 bg-amber-50">
-        <AlertTriangle className="h-4 w-4 text-amber-600" />
-        <AlertDescription className="text-amber-800">
-          <strong>Important:</strong> For USB blocking to work properly, the backend server must run with administrative privileges.
-          <ul className="list-disc pl-5 mt-2 text-sm">
-            <li>On Windows: Run the command prompt as Administrator</li>
-            <li>On macOS: Use sudo to run the backend server</li>
-            <li>On Linux: Use sudo or setup appropriate udev rules</li>
-          </ul>
-        </AlertDescription>
-      </Alert>
+      
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         {stats.map(stat => <div key={stat.title} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:border-primary/20 transition-all duration-200 cursor-pointer" onClick={() => {
@@ -680,5 +657,4 @@ const Dashboard = () => {
       </Dialog>
     </div>;
 };
-
 export default Dashboard;
