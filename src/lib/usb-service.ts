@@ -4,6 +4,22 @@
 // API endpoint URLs - update these with your actual backend server address
 const API_BASE_URL = "http://localhost:3001";
 
+// Function to convert hexadecimal IDs if needed
+const normalizeHexId = (id) => {
+  // Check if the ID is already in the correct format
+  if (!id) return "";
+  
+  // Remove any 0x prefix if present
+  let normalizedId = id.toString().replace(/^0x/i, '');
+  
+  // Ensure it's 4 digits by padding with leading zeros if needed
+  while (normalizedId.length < 4) {
+    normalizedId = '0' + normalizedId;
+  }
+  
+  return normalizedId;
+};
+
 // Real API calls to backend
 export const fetchUSBDevices = async () => {
   try {
@@ -13,6 +29,7 @@ export const fetchUSBDevices = async () => {
     }
     
     const data = await response.json();
+    console.log("Fetched USB device data:", data);
     return data;
   } catch (error) {
     console.error("Error fetching USB devices:", error);
@@ -22,10 +39,19 @@ export const fetchUSBDevices = async () => {
 
 export const addDeviceToWhitelist = async (device) => {
   try {
+    // Normalize product and vendor IDs before sending to backend
+    const normalizedDevice = {
+      ...device,
+      productId: normalizeHexId(device.productId),
+      vendorId: normalizeHexId(device.vendorId)
+    };
+    
+    console.log("Adding device to whitelist:", normalizedDevice);
+    
     const response = await fetch(`${API_BASE_URL}/api/whitelist`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(device)
+      body: JSON.stringify(normalizedDevice)
     });
     
     if (!response.ok) {
@@ -121,6 +147,9 @@ export const ejectUSBDevice = async (deviceId) => {
       body: JSON.stringify({ platform })
     });
     
+    // Log full response for debugging
+    console.log("Eject response status:", response.status);
+    
     if (!response.ok) {
       const errorData = await response.json();
       console.error("Eject error response:", errorData);
@@ -178,6 +207,31 @@ export const monitorUSBPorts = async (callback) => {
       try {
         const data = JSON.parse(event.data);
         console.log("Received WebSocket data:", data);
+        
+        // Normalize IDs in received data if needed
+        if (data.newLog && data.newLog.vendorId) {
+          data.newLog.vendorId = normalizeHexId(data.newLog.vendorId);
+        }
+        if (data.newLog && data.newLog.productId) {
+          data.newLog.productId = normalizeHexId(data.newLog.productId);
+        }
+        
+        if (data.newBlockedAttempt && data.newBlockedAttempt.vendorId) {
+          data.newBlockedAttempt.vendorId = normalizeHexId(data.newBlockedAttempt.vendorId);
+        }
+        if (data.newBlockedAttempt && data.newBlockedAttempt.productId) {
+          data.newBlockedAttempt.productId = normalizeHexId(data.newBlockedAttempt.productId);
+        }
+        
+        // Fix whitelist update data if present
+        if (data.whitelistUpdate) {
+          data.whitelistUpdate = data.whitelistUpdate.map(device => ({
+            ...device,
+            vendorId: normalizeHexId(device.vendorId),
+            productId: normalizeHexId(device.productId)
+          }));
+        }
+        
         callback(data);
       } catch (error) {
         console.error("Error handling WebSocket message:", error);
