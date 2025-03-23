@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Shield, List, Plus, Database, Check, X, Filter, Ban, Settings } from "lucide-react";
+import { Shield, List, Plus, Database, Check, X, Filter, Ban, Settings, AlertTriangle } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,9 @@ import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { fetchUSBDevices, monitorUSBPorts, addDeviceToWhitelist, removeDeviceFromWhitelist, fetchAllowedDeviceClasses, updateAllowedDeviceClasses } from "@/lib/usb-service";
+
 const Dashboard = () => {
   const {
     toast
@@ -33,7 +35,6 @@ const Dashboard = () => {
     username: ""
   });
 
-  // Standard USB Device Classes for reference
   const deviceClassesList = [{
     id: "00",
     name: "Device",
@@ -115,6 +116,7 @@ const Dashboard = () => {
     name: "Vendor Specific",
     description: "Vendor specific devices"
   }];
+
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -128,13 +130,14 @@ const Dashboard = () => {
         console.error("Error fetching USB devices:", error);
         toast({
           title: "Error",
-          description: "Failed to fetch USB devices data",
+          description: "Failed to fetch USB devices data. Make sure the backend server is running.",
           variant: "destructive"
         });
       }
     };
     fetchData();
   }, [toast]);
+
   useEffect(() => {
     let monitoringSubscription;
     const startMonitoring = async () => {
@@ -180,6 +183,7 @@ const Dashboard = () => {
       setIsMonitoring(false);
     };
   }, [toast]);
+
   const handleInputChange = e => {
     const {
       name,
@@ -190,6 +194,7 @@ const Dashboard = () => {
       [name]: value
     }));
   };
+
   const handleAddDevice = async () => {
     try {
       await addDeviceToWhitelist(newDevice);
@@ -219,6 +224,7 @@ const Dashboard = () => {
       });
     }
   };
+
   const handleAddToWhitelist = async device => {
     try {
       await addDeviceToWhitelist(device);
@@ -241,11 +247,10 @@ const Dashboard = () => {
       });
     }
   };
+
   const handleBlockDevice = async deviceId => {
     try {
       await removeDeviceFromWhitelist(deviceId);
-
-      // Remove the device from the whitelisted devices list
       setWhitelistedDevices(prev => prev.filter(device => device.id !== deviceId));
       toast({
         title: "Success!",
@@ -261,16 +266,14 @@ const Dashboard = () => {
       });
     }
   };
+
   const handleToggleDeviceClass = async classId => {
     try {
-      // Check if class is already allowed
       const isAllowed = allowedClasses.some(c => c.id === classId);
       let updatedClasses;
       if (isAllowed) {
-        // Remove from allowed classes
         updatedClasses = allowedClasses.filter(c => c.id !== classId);
       } else {
-        // Add to allowed classes
         const classToAdd = deviceClassesList.find(c => c.id === classId);
         if (classToAdd) {
           updatedClasses = [...allowedClasses, classToAdd];
@@ -278,11 +281,7 @@ const Dashboard = () => {
           updatedClasses = [...allowedClasses];
         }
       }
-
-      // Update allowed classes in backend
       await updateAllowedDeviceClasses(updatedClasses);
-
-      // Update local state
       setAllowedClasses(updatedClasses);
       toast({
         title: "Success!",
@@ -298,6 +297,7 @@ const Dashboard = () => {
       });
     }
   };
+
   const stats = [{
     title: "Total USB Events",
     value: logs.length.toString(),
@@ -317,6 +317,7 @@ const Dashboard = () => {
     change: `${whitelistedDevices.length} devices`,
     changeType: "positive"
   }];
+
   const filteredLogs = logs.filter(log => {
     if (statusFilter !== "all" && log.status !== statusFilter) {
       return false;
@@ -326,11 +327,13 @@ const Dashboard = () => {
     }
     return true;
   });
+
   const getDeviceClassInfo = classId => {
     if (!classId) return "Unknown";
     const classInfo = deviceClassesList.find(c => c.id.toLowerCase() === classId.toLowerCase());
     return classInfo ? classInfo.name : classId;
   };
+
   return <div className="p-8 max-w-7xl mx-auto">
       <div className="flex justify-between items-center mb-8">
         <div>
@@ -350,6 +353,18 @@ const Dashboard = () => {
           </Button>
         </div>
       </div>
+
+      <Alert className="mb-6 border-amber-300 bg-amber-50">
+        <AlertTriangle className="h-4 w-4 text-amber-600" />
+        <AlertDescription className="text-amber-800">
+          <strong>Important:</strong> For USB blocking to work properly, the backend server must run with administrative privileges.
+          <ul className="list-disc pl-5 mt-2 text-sm">
+            <li>On Windows: Run the command prompt as Administrator</li>
+            <li>On macOS: Use sudo to run the backend server</li>
+            <li>On Linux: Use sudo or setup appropriate udev rules</li>
+          </ul>
+        </AlertDescription>
+      </Alert>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         {stats.map(stat => <div key={stat.title} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:border-primary/20 transition-all duration-200 cursor-pointer" onClick={() => {
@@ -665,4 +680,5 @@ const Dashboard = () => {
       </Dialog>
     </div>;
 };
+
 export default Dashboard;
