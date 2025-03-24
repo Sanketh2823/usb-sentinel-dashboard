@@ -1,4 +1,3 @@
-
 // USB service for handling device data and monitoring
 
 // API endpoint URLs - update these with your actual backend server address
@@ -202,7 +201,7 @@ export const ejectUSBDevice = async (deviceId) => {
   }
 };
 
-// Function to force refresh USB devices
+// Function to force refresh USB device list
 export const refreshUSBDevices = async () => {
   try {
     // Get the operating system platform info from the client
