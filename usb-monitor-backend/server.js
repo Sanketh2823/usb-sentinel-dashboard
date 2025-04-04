@@ -300,13 +300,13 @@ const ejectUSBDevice = async (vendorId, productId, platform) => {
   
   if (platform === 'win32') {
     // Windows - using PowerShell to eject device
-    command = `powershell "$driveEject = New-Object -comObject Shell.Application; $driveEject.Namespace(17).ParseName((Get-WmiObject Win32_DiskDrive | Where-Object { $_.PNPDeviceID -like '*VID_${vendorId}&PID_${productId}*' } | Get-WmiObject -Query 'ASSOCIATORS OF {$_.} WHERE ResultClass=Win32_DiskPartition' | ForEach-Object { Get-WmiObject -Query 'ASSOCIATORS OF {$_.} WHERE ResultClass=Win32_LogicalDisk' } | Select-Object -First 1 DeviceID).DeviceID).InvokeVerb('Eject')";
+    command = "powershell \"$driveEject = New-Object -comObject Shell.Application; $driveEject.Namespace(17).ParseName((Get-WmiObject Win32_DiskDrive | Where-Object { $_.PNPDeviceID -like '*VID_" + vendorId + "&PID_" + productId + "*' } | Get-WmiObject -Query 'ASSOCIATORS OF {$_.} WHERE ResultClass=Win32_DiskPartition' | ForEach-Object { Get-WmiObject -Query 'ASSOCIATORS OF {$_.} WHERE ResultClass=Win32_LogicalDisk' } | Select-Object -First 1 DeviceID).DeviceID).InvokeVerb('Eject')\"";
   } else if (platform === 'darwin') {
     // macOS - using diskutil to eject
-    command = `diskutil eject $(system_profiler SPUSBDataType | grep -A 20 "Vendor ID: 0x${vendorId}" | grep -A 15 "Product ID: 0x${productId}" | grep -A 5 "BSD Name:" | head -n 1 | awk '{print $3}')`;
+    command = "diskutil eject $(system_profiler SPUSBDataType | grep -A 20 \"Vendor ID: 0x" + vendorId + "\" | grep -A 15 \"Product ID: 0x" + productId + "\" | grep -A 5 \"BSD Name:\" | head -n 1 | awk '{print $3}')";
   } else {
     // Linux - using udisks to eject
-    command = `udisksctl unmount -b /dev/$(lsblk -o NAME,VENDOR,MODEL | grep -i "${vendorId}.*${productId}" | awk '{print $1}' | head -n 1)`;
+    command = "udisksctl unmount -b /dev/$(lsblk -o NAME,VENDOR,MODEL | grep -i \"" + vendorId + ".*" + productId + "\" | awk '{print $1}' | head -n 1)";
   }
 
   return new Promise((resolve) => {
