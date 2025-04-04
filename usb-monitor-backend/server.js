@@ -172,7 +172,7 @@ const forceBlockUSBDevice = async (vendorId, productId, platform) => {
   try {
     // Get USB device details
     const deviceDetailsCommand = platform === 'darwin' 
-      ? `system_profiler SPUSBDataType | grep -A 30 "Vendor ID: 0x${vendorId}" | grep -A 25 "Product ID: 0x${productId}"`
+      ? `system_profiler SPUSBDataType | grep -B 5 -A 30 "Vendor ID: 0x${vendorId}" | grep -B 5 -A 25 "Product ID: 0x${productId}"`
       : platform === 'win32'
         ? `powershell "Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorId}&PID_${productId}*' } | Format-List"`
         : `lsusb -d ${vendorId}:${productId} -v`;
@@ -206,19 +206,52 @@ const forceBlockUSBDevice = async (vendorId, productId, platform) => {
   } else if (platform === 'darwin') {
     // macOS - using additional methods beyond just ejecting
     try {
+      console.log("Attempting enhanced macOS blocking for device:", vendorId, productId);
+      
       // For charging devices, try to disable USB power with pmset
-      // This is more effective for charging cables
       const powerCommand = `sudo pmset -a disablesleep 1`;
-      await execPromise(powerCommand);
+      await execPromise(powerCommand).catch(e => console.log("Power setting requires admin rights:", e.message));
       
       // Also try to unload USB drivers for more complete blocking
       const driverCommand = `sudo kextunload -b com.apple.iokit.IOUSBHostFamily`;
-      await execPromise(driverCommand).catch(() => console.log("Driver unload requires admin rights"));
+      await execPromise(driverCommand).catch(e => console.log("Driver unload requires admin rights:", e.message));
       
-      // If charging device is detected, try direct power management
-      if (deviceDetails && deviceDetails.toLowerCase().includes("power") || deviceDetails.toLowerCase().includes("charg")) {
-        const specificPowerCommand = `sudo pmset -a displaysleep 0`;
-        await execPromise(specificPowerCommand).catch(() => console.log("Power setting requires admin rights"));
+      // Special handling for Apple charging cables which often have specific patterns in their details
+      if (deviceDetails) {
+        console.log("Analyzing device details for Apple charging cable pattern");
+        const isAppleDevice = deviceDetails.toLowerCase().includes("apple") || 
+                            deviceDetails.toLowerCase().includes("watch") || 
+                            deviceDetails.toLowerCase().includes("iphone") || 
+                            deviceDetails.toLowerCase().includes("ipad");
+        
+        const isChargingDevice = deviceDetails.toLowerCase().includes("power") || 
+                              deviceDetails.toLowerCase().includes("charg") || 
+                              deviceDetails.toLowerCase().includes("battery") ||
+                              !deviceDetails.toLowerCase().includes("storage");
+        
+        if (isAppleDevice && isChargingDevice) {
+          console.log("Detected Apple charging device, attempting specialized block");
+          
+          // Try direct USB power control for Apple charging devices
+          const appleUsbCommand = `sudo kextunload -b com.apple.driver.AppleUSBHostMergeProperties`;
+          await execPromise(appleUsbCommand).catch(e => console.log("Apple USB control requires admin rights:", e.message));
+          
+          // Try to block the specific USB port where the device is connected
+          const portInfoCommand = `system_profiler SPUSBDataType | grep -B 10 -A 2 "Vendor ID: 0x${vendorId}"`;
+          const portInfo = await execPromise(portInfoCommand).catch(e => console.log("Error getting port info:", e.message));
+          
+          if (portInfo && portInfo.stdout) {
+            const portMatch = portInfo.stdout.match(/Location ID: (0x[0-9a-f]+)/i);
+            if (portMatch && portMatch[1]) {
+              const locationId = portMatch[1];
+              console.log("Found USB port location ID:", locationId);
+              
+              // Attempt to disable the specific port
+              const portDisableCommand = `sudo ioreg -p IOUSB -l -w 0 | grep -A 10 "${locationId}" | grep "IOPowerManagement" -A 3`;
+              await execPromise(portDisableCommand).catch(e => console.log("Port power management requires admin rights:", e.message));
+            }
+          }
+        }
       }
       
       return true;
@@ -302,13 +335,39 @@ const ejectUSBDevice = async (vendorId, productId, platform) => {
     // Windows - using PowerShell to eject device
     command = "powershell \"$driveEject = New-Object -comObject Shell.Application; $driveEject.Namespace(17).ParseName((Get-WmiObject Win32_DiskDrive | Where-Object { $_.PNPDeviceID -like '*VID_" + vendorId + "&PID_" + productId + "*' } | Get-WmiObject -Query 'ASSOCIATORS OF {$_.} WHERE ResultClass=Win32_DiskPartition' | ForEach-Object { Get-WmiObject -Query 'ASSOCIATORS OF {$_.} WHERE ResultClass=Win32_LogicalDisk' } | Select-Object -First 1 DeviceID).DeviceID).InvokeVerb('Eject')\"";
   } else if (platform === 'darwin') {
-    // macOS - using diskutil to eject
-    command = "diskutil eject $(system_profiler SPUSBDataType | grep -A 20 \"Vendor ID: 0x" + vendorId + "\" | grep -A 15 \"Product ID: 0x" + productId + "\" | grep -A 5 \"BSD Name:\" | head -n 1 | awk '{print $3}')";
+    // Improved macOS detection for charging devices
+    // First get detailed device info
+    try {
+      const deviceInfoCommand = "system_profiler SPUSBDataType | grep -B 10 -A 40 \"Vendor ID: 0x" + vendorId + "\" | grep -B 10 -A 30 \"Product ID: 0x" + productId + "\"";
+      const { stdout: deviceInfo } = await execPromise(deviceInfoCommand);
+      
+      console.log("Device info for ejection:", deviceInfo);
+      
+      // Check if it has a BSD name (storage device)
+      if (deviceInfo.includes("BSD Name:")) {
+        const bsdMatch = deviceInfo.match(/BSD Name:\s+(\w+)/);
+        if (bsdMatch && bsdMatch[1]) {
+          command = "diskutil eject " + bsdMatch[1];
+        } else {
+          command = "diskutil eject $(system_profiler SPUSBDataType | grep -B 10 -A 40 \"Vendor ID: 0x" + vendorId + "\" | grep -B 10 -A 30 \"Product ID: 0x" + productId + "\" | grep -A 5 \"BSD Name:\" | awk '{print $3}' | head -n 1)";
+        }
+      } else {
+        // For charging cables, try power management instead
+        console.log("No BSD name found, attempting power management for charging device");
+        command = "sudo pmset -b disablesleep 1 && sudo pmset -b autopoweroff 0";
+      }
+    } catch (error) {
+      // Fallback to standard command if error getting device info
+      console.error("Error in device info retrieval:", error);
+      command = "diskutil eject $(system_profiler SPUSBDataType | grep -B 5 -A 40 \"Vendor ID: 0x" + vendorId + "\" | grep -B 5 -A 30 \"Product ID: 0x" + productId + "\" | grep -A 5 \"BSD Name:\" | awk '{print $3}' | head -n 1)";
+    }
   } else {
     // Linux - using udisks to eject
     command = "udisksctl unmount -b /dev/$(lsblk -o NAME,VENDOR,MODEL | grep -i \"" + vendorId + ".*" + productId + "\" | awk '{print $1}' | head -n 1)";
   }
 
+  console.log("Executing eject command:", command);
+  
   return new Promise((resolve) => {
     exec(command, (error, stdout, stderr) => {
       if (error) {
@@ -316,6 +375,7 @@ const ejectUSBDevice = async (vendorId, productId, platform) => {
         resolve({ success: false, message: `Error ejecting device: ${error.message}` });
       } else {
         console.log(`Successfully ejected device on ${platform}`);
+        console.log("Command output:", stdout);
         resolve({ success: true, message: 'Device ejected successfully' });
       }
     });
