@@ -788,3 +788,266 @@ app.get('/api/system-info', (req, res) => {
       arch: os.arch(),
       hostname: os.hostname(),
       type: os.type(),
+      release: os.release(),
+      cpus: os.cpus().length,
+      memory: {
+        total: Math.round(os.totalmem() / (1024 * 1024 * 1024)) + ' GB',
+        free: Math.round(os.freemem() / (1024 * 1024 * 1024)) + ' GB'
+      },
+      uptime: Math.floor(os.uptime() / 3600) + ' hours'
+    };
+    
+    res.json(systemInfo);
+  } catch (error) {
+    console.error('Error getting system info:', error);
+    res.status(500).json({ error: 'Failed to get system info' });
+  }
+});
+
+// New endpoint to eject a USB device
+app.post('/api/eject-device', async (req, res) => {
+  try {
+    const { vendorId, productId } = req.body;
+    const platform = os.platform();
+    
+    // Log the eject attempt
+    console.log(`Attempting to eject device: ${vendorId}:${productId} on ${platform}`);
+    
+    // Call the eject function
+    const result = await ejectUSBDevice(vendorId, productId, platform);
+    
+    // Log the action
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      vendorId,
+      productId,
+      action: 'Eject attempted',
+      status: result.success ? 'success' : 'failed',
+      message: result.message,
+      requiresAdmin: result.requiresAdmin,
+      date: new Date().toISOString(),
+      id: Date.now()
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    
+    // Broadcast the update
+    broadcastUpdate({
+      newLog: logEntry
+    });
+    
+    res.json(result);
+  } catch (error) {
+    console.error('Error ejecting device:', error);
+    res.status(500).json({ error: 'Failed to eject device', message: error.message });
+  }
+});
+
+// New endpoint to force block a USB device
+app.post('/api/force-block-device', async (req, res) => {
+  try {
+    const { vendorId, productId } = req.body;
+    const platform = os.platform();
+    
+    // Log the block attempt
+    console.log(`Attempting to force block device: ${vendorId}:${productId} on ${platform}`);
+    
+    // Call the block function
+    const result = await forceBlockUSBDevice(vendorId, productId, platform);
+    
+    // Log the action
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      vendorId,
+      productId,
+      action: 'Force block attempted',
+      status: result.success ? 'success' : 'failed',
+      requiresAdmin: result.requiresAdmin,
+      date: new Date().toISOString(),
+      id: Date.now()
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    
+    // Add to blocked attempts if needed
+    const blockedAttempts = readDataFile(blockedAttemptsPath);
+    if (result.success) {
+      const blockedEntry = {
+        vendorId,
+        productId,
+        status: 'blocked',
+        date: new Date().toISOString(),
+        id: Date.now()
+      };
+      blockedAttempts.unshift(blockedEntry);
+      writeDataFile(blockedAttemptsPath, blockedAttempts);
+      
+      // Broadcast the update
+      broadcastUpdate({
+        newBlockedAttempt: blockedEntry,
+        newLog: logEntry
+      });
+    } else {
+      // Broadcast just the log update
+      broadcastUpdate({
+        newLog: logEntry
+      });
+    }
+    
+    res.json(result);
+  } catch (error) {
+    console.error('Error force blocking device:', error);
+    res.status(500).json({ error: 'Failed to force block device', message: error.message });
+  }
+});
+
+// New endpoint to refresh USB devices
+app.post('/api/refresh-devices', async (req, res) => {
+  try {
+    const platform = os.platform();
+    
+    // Call the refresh function
+    const result = await refreshUSBDevices(platform);
+    
+    // Log the action
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      action: 'Refresh USB devices',
+      status: result.success ? 'success' : 'failed',
+      message: result.message,
+      date: new Date().toISOString(),
+      id: Date.now()
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    
+    // Broadcast the update
+    broadcastUpdate({
+      newLog: logEntry
+    });
+    
+    res.json(result);
+  } catch (error) {
+    console.error('Error refreshing USB devices:', error);
+    res.status(500).json({ error: 'Failed to refresh USB devices', message: error.message });
+  }
+});
+
+// Handle WebSocket connections
+wss.on('connection', (socket) => {
+  console.log('WebSocket client connected');
+  
+  // Send initial data
+  const initialData = {
+    whitelistedDevices: readDataFile(whitelistPath),
+    blockedAttempts: readDataFile(blockedAttemptsPath),
+    logs: readDataFile(logsPath),
+    allowedClasses: readDataFile(allowedClassesPath)
+  };
+  
+  socket.send(JSON.stringify(initialData));
+  
+  // Listen for messages from client
+  socket.on('message', (message) => {
+    console.log('Received message from client:', message);
+  });
+  
+  // Handle disconnection
+  socket.on('close', () => {
+    console.log('WebSocket client disconnected');
+  });
+});
+
+// Initialize USB detection
+usbDetect.startMonitoring();
+
+// Handle USB device add event
+usbDetect.on('add', async (device) => {
+  console.log('USB device connected:', device);
+  
+  const { vendorId, productId } = device;
+  const hexVendorId = vendorId.toString(16).padStart(4, '0');
+  const hexProductId = productId.toString(16).padStart(4, '0');
+  
+  // Check if device is in whitelist
+  const whitelistedDevices = readDataFile(whitelistPath);
+  const isWhitelisted = whitelistedDevices.some(
+    d => d.vendorId.toLowerCase() === hexVendorId.toLowerCase() && 
+         d.productId.toLowerCase() === hexProductId.toLowerCase()
+  );
+  
+  // Get device class
+  const deviceClass = await getDeviceClass(hexVendorId, hexProductId);
+  
+  // Check if device class is allowed
+  const allowedClasses = readDataFile(allowedClassesPath);
+  const isClassAllowed = allowedClasses.some(
+    c => c.id.toLowerCase() === deviceClass.toLowerCase()
+  );
+  
+  // Device details to log
+  const deviceDetails = {
+    vendorId: hexVendorId,
+    productId: hexProductId,
+    manufacturer: device.manufacturer || 'Unknown',
+    product: device.product || 'Unknown',
+    deviceClass,
+    date: new Date().toISOString(),
+    id: Date.now()
+  };
+  
+  // If device is whitelisted or class is allowed, allow it
+  if (isWhitelisted || isClassAllowed) {
+    console.log('Device is allowed:', deviceDetails);
+    
+    // Log the allowed device
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      ...deviceDetails,
+      action: isWhitelisted ? 'Device in whitelist' : 'Device class allowed',
+      status: 'allowed'
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    
+    // Broadcast the update
+    broadcastUpdate({
+      newLog: logEntry
+    });
+  } else {
+    console.log('Blocking unauthorized device:', deviceDetails);
+    
+    // Block the device
+    blockUSBDevice(hexVendorId, hexProductId);
+    
+    // Log the blocked device
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      ...deviceDetails,
+      action: 'Blocked unauthorized device',
+      status: 'blocked'
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    
+    // Add to blocked attempts
+    const blockedAttempts = readDataFile(blockedAttemptsPath);
+    const blockedEntry = {
+      ...deviceDetails,
+      status: 'blocked'
+    };
+    blockedAttempts.unshift(blockedEntry);
+    writeDataFile(blockedAttemptsPath, blockedAttempts);
+    
+    // Broadcast the update
+    broadcastUpdate({
+      newBlockedAttempt: blockedEntry,
+      newLog: logEntry
+    });
+  }
+});
+
+// Start the server
+server.listen(port, () => {
+  console.log(`USB Monitor backend server running on http://localhost:${port}`);
+});
