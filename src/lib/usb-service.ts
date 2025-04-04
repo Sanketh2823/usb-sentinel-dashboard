@@ -1,4 +1,3 @@
-
 // USB service for handling device data and monitoring
 
 // API endpoint URLs - update these with your actual backend server address
@@ -194,6 +193,12 @@ export const forceBlockUSBDevice = async (deviceId) => {
     
     const data = await response.json();
     console.log("Force block device response:", data);
+    
+    // Check if admin privileges are required
+    if (data.requiresAdmin && data.permissionInstructions) {
+      console.log("Admin privileges required for full blocking:", data.permissionInstructions);
+    }
+    
     return data;
   } catch (error) {
     console.error("Error force blocking USB device:", error);
@@ -259,6 +264,42 @@ export const refreshUSBDevices = async () => {
   } catch (error) {
     console.error("Error refreshing USB devices:", error);
     throw new Error(error.message || "Failed to refresh USB devices");
+  }
+};
+
+// New function to check system permissions
+export const checkSystemPermissions = async () => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/system-permissions`);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log("System permissions check:", data);
+    return data;
+  } catch (error) {
+    console.error("Error checking system permissions:", error);
+    throw new Error("Failed to check system permissions");
+  }
+};
+
+// New function to check admin privileges
+export const checkAdminPrivileges = async () => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin-check`);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log("Admin privileges check:", data);
+    return data;
+  } catch (error) {
+    console.error("Error checking admin privileges:", error);
+    throw new Error("Failed to check admin privileges");
   }
 };
 

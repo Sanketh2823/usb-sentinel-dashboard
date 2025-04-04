@@ -60,6 +60,69 @@ const initializeDataFiles = () => {
 
 initializeDataFiles();
 
+// New function to check for admin/system privileges
+const checkSystemPrivileges = () => {
+  return new Promise((resolve) => {
+    const platform = os.platform();
+    let checkCommand;
+    
+    if (platform === 'darwin') {
+      // Check for admin access on macOS
+      checkCommand = 'sudo -n true 2>/dev/null';
+    } else if (platform === 'win32') {
+      // Check for admin access on Windows
+      checkCommand = 'net session >nul 2>&1';
+    } else {
+      // Check for sudo access on Linux
+      checkCommand = 'sudo -n true 2>/dev/null';
+    }
+    
+    exec(checkCommand, (error) => {
+      // If there's an error, we don't have admin privileges
+      resolve(!error);
+    });
+  });
+};
+
+// Helper function to get permission instructions based on platform
+const getPermissionInstructions = () => {
+  const platform = os.platform();
+  
+  if (platform === 'darwin') {
+    return {
+      platform: 'macOS',
+      instructions: [
+        'Open Terminal and run the following command:',
+        'sudo /path/to/your/app',
+        'Alternatively, you can run this command to grant permissions:',
+        'sudo chmod +s /path/to/your/app',
+        'For USB power management, you may need to grant Full Disk Access to Terminal in System Preferences > Security & Privacy > Privacy'
+      ]
+    };
+  } else if (platform === 'win32') {
+    return {
+      platform: 'Windows',
+      instructions: [
+        'Right-click on the application and select "Run as administrator"',
+        'Or, you can create a shortcut to the app, right-click the shortcut, select Properties, click Advanced, and check "Run as administrator"',
+        'You may also need to run Command Prompt as administrator and start the application from there'
+      ]
+    };
+  } else {
+    return {
+      platform: 'Linux',
+      instructions: [
+        'Run the application with sudo:',
+        'sudo /path/to/your/app',
+        'Alternatively, you can create a udev rule to allow non-root users to manage USB devices:',
+        'Create a file at /etc/udev/rules.d/99-usb-permissions.rules',
+        'Add: SUBSYSTEM=="usb", MODE="0666"',
+        'Then run: sudo udevadm control --reload-rules && sudo udevadm trigger'
+      ]
+    };
+  }
+};
+
 // Helper functions for data operations
 const readDataFile = (filePath) => {
   try {
@@ -164,6 +227,23 @@ const getDeviceClass = async (vendorId, productId) => {
   });
 };
 
+// Add a new endpoint to check system permissions
+app.get('/api/system-permissions', async (req, res) => {
+  try {
+    const hasPrivileges = await checkSystemPrivileges();
+    const permissionInstructions = getPermissionInstructions();
+    
+    res.json({
+      hasSystemPrivileges: hasPrivileges,
+      platform: os.platform(),
+      permissionInstructions
+    });
+  } catch (error) {
+    console.error('Error checking system permissions:', error);
+    res.status(500).json({ error: 'Failed to check system permissions' });
+  }
+});
+
 // Improved function to block a USB device with more aggressive methods
 const forceBlockUSBDevice = async (vendorId, productId, platform) => {
   // Get more detailed device info for targeted blocking
@@ -184,6 +264,10 @@ const forceBlockUSBDevice = async (vendorId, productId, platform) => {
     console.log("Error getting device details:", error);
   }
   
+  // Before attempting to block, check privileges
+  const hasPrivileges = await checkSystemPrivileges();
+  console.log(`System privileges check: ${hasPrivileges ? 'Yes' : 'No'}`);
+  
   // First try standard blocking method
   const standardBlockResult = await blockUSBDevice(vendorId, productId);
   
@@ -199,9 +283,17 @@ const forceBlockUSBDevice = async (vendorId, productId, platform) => {
       const registryCommand = `powershell "Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorId}&PID_${productId}*' } | ForEach-Object { $_ | New-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Enum\\$($_.DeviceID)' -Name 'ConfigFlags' -Value 1 -PropertyType DWORD -Force -ErrorAction SilentlyContinue }"`;
       await execPromise(registryCommand);
       
-      return true;
+      return {
+        success: true,
+        requiresAdmin: !hasPrivileges
+      };
     } catch (error) {
       console.error(`Error with enhanced blocking on Windows: ${error.message}`);
+      return {
+        success: false,
+        requiresAdmin: true,
+        error: error.message
+      };
     }
   } else if (platform === 'darwin') {
     // macOS - using additional methods beyond just ejecting
@@ -254,9 +346,57 @@ const forceBlockUSBDevice = async (vendorId, productId, platform) => {
         }
       }
       
-      return true;
+      // Get direct device info from system_profiler
+      const directInfoCommand = `system_profiler SPUSBDataType`;
+      const directInfo = await execPromise(directInfoCommand).catch(e => console.log("Error getting direct device info:", e.message));
+      
+      if (directInfo && directInfo.stdout) {
+        console.log("Analyzing full USB device list to find charging device");
+        
+        // Look for Apple devices and charging cables
+        const deviceSection = directInfo.stdout.split('\n\n').find(section => 
+          section.includes(`Vendor ID: 0x${vendorId}`) && 
+          section.includes(`Product ID: 0x${productId}`)
+        );
+        
+        if (deviceSection) {
+          console.log("Found device section:", deviceSection);
+          
+          // Check if it's a charging device (Apple Watch chargers often don't have BSD names)
+          const isChargingOnly = !deviceSection.includes("BSD Name:") && 
+                              (deviceSection.toLowerCase().includes("apple") || 
+                               deviceSection.toLowerCase().includes("watch") ||
+                               deviceSection.toLowerCase().includes("power"));
+          
+          if (isChargingOnly) {
+            console.log("Detected charging-only device, attempting specialized power management");
+            
+            // Try to use ioreg to find the specific device
+            const ioregCommand = `ioreg -p IOUSB -l | grep -A 20 -B 5 "${vendorId}" | grep -A 15 -B 5 "${productId}"`;
+            const ioregInfo = await execPromise(ioregCommand).catch(e => console.log("Error getting ioreg info:", e.message));
+            
+            if (ioregInfo && ioregInfo.stdout) {
+              console.log("Found device in ioreg, attempting power management");
+              
+              // Attempt aggressive power management
+              const pmCommand = `sudo pmset -b batterypollinterval 0 && sudo pmset -b sleep 0 && sudo pmset -a hibernatemode 0`;
+              await execPromise(pmCommand).catch(e => console.log("PM command requires admin rights:", e.message));
+            }
+          }
+        }
+      }
+      
+      return {
+        success: true,
+        requiresAdmin: !hasPrivileges
+      };
     } catch (error) {
       console.error(`Error with enhanced blocking on macOS: ${error.message}`);
+      return {
+        success: false,
+        requiresAdmin: true,
+        error: error.message
+      };
     }
   } else {
     // Linux - using additional methods beyond authorization
@@ -265,13 +405,24 @@ const forceBlockUSBDevice = async (vendorId, productId, platform) => {
       const linuxCommand = `echo 'auto' | sudo tee /sys/bus/usb/devices/*/power/control`;
       await execPromise(linuxCommand).catch(() => console.log("Power control requires admin rights"));
       
-      return true;
+      return {
+        success: true,
+        requiresAdmin: !hasPrivileges
+      };
     } catch (error) {
       console.error(`Error with enhanced blocking on Linux: ${error.message}`);
+      return {
+        success: false,
+        requiresAdmin: true,
+        error: error.message
+      };
     }
   }
   
-  return standardBlockResult;
+  return {
+    success: standardBlockResult,
+    requiresAdmin: !hasPrivileges
+  };
 };
 
 // Helper function to promisify exec
@@ -327,7 +478,7 @@ const blockUSBDevice = async (vendorId, productId) => {
   return true;
 };
 
-// New function to eject a USB device
+// Modified ejectUSBDevice function to fix the syntax error with template literals
 const ejectUSBDevice = async (vendorId, productId, platform) => {
   let command;
   
@@ -352,9 +503,62 @@ const ejectUSBDevice = async (vendorId, productId, platform) => {
           command = "diskutil eject $(system_profiler SPUSBDataType | grep -B 10 -A 40 \"Vendor ID: 0x" + vendorId + "\" | grep -B 10 -A 30 \"Product ID: 0x" + productId + "\" | grep -A 5 \"BSD Name:\" | awk '{print $3}' | head -n 1)";
         }
       } else {
-        // For charging cables, try power management instead
-        console.log("No BSD name found, attempting power management for charging device");
-        command = "sudo pmset -b disablesleep 1 && sudo pmset -b autopoweroff 0";
+        // For charging cables, try direct system_profiler search to find device info
+        console.log("No BSD name found, attempting to get full USB device info");
+        
+        // Run full system_profiler to find complete device data
+        const fullUsbInfo = await execPromise("system_profiler SPUSBDataType");
+        if (fullUsbInfo && fullUsbInfo.stdout) {
+          // Parse the output to find the specific device
+          const deviceSections = fullUsbInfo.stdout.split('\n\n');
+          const targetDevice = deviceSections.find(section => 
+            section.includes(`Vendor ID: 0x${vendorId}`) && 
+            section.includes(`Product ID: 0x${productId}`)
+          );
+          
+          if (targetDevice) {
+            console.log("Found target device in system_profiler output:", targetDevice);
+            
+            // Check if it looks like a charging device
+            const isChargingDevice = !targetDevice.includes("BSD Name:") && 
+                                   (targetDevice.toLowerCase().includes("apple") || 
+                                    targetDevice.toLowerCase().includes("watch") ||
+                                    targetDevice.toLowerCase().includes("power"));
+            
+            if (isChargingDevice) {
+              console.log("Detected charging device, applying power management");
+              command = "sudo pmset -b disablesleep 1 && sudo pmset -b autopoweroff 0";
+              
+              // Also try to find USB port location for targeted power management
+              const locationMatch = targetDevice.match(/Location ID:\s+(0x[0-9a-f]+)/i);
+              if (locationMatch && locationMatch[1]) {
+                const locationId = locationMatch[1];
+                console.log("Found USB port location ID:", locationId);
+                
+                // Create a more targeted command using location ID
+                const targetedCommand = "sudo ioreg -p IOUSB -l -w 0 | grep -A 20 \"" + locationId + "\" | grep \"IOPowerManagement\" -A 5";
+                
+                // Execute this command in addition to the main command
+                exec(targetedCommand, (error, stdout, stderr) => {
+                  if (error) {
+                    console.log("Error with targeted power management:", error.message);
+                  } else {
+                    console.log("Targeted power management result:", stdout);
+                  }
+                });
+              }
+            } else {
+              // Fallback to standard command
+              command = "diskutil eject $(system_profiler SPUSBDataType | grep -B 5 -A 40 \"Vendor ID: 0x" + vendorId + "\" | grep -B 5 -A 30 \"Product ID: 0x" + productId + "\" | grep -A 5 \"BSD Name:\" | awk '{print $3}' | head -n 1)";
+            }
+          } else {
+            // Fallback command
+            command = "sudo pmset -a sleep 0 && sudo pmset -a disablesleep 1";
+          }
+        } else {
+          // Fallback to standard command if can't get device info
+          command = "sudo pmset -a sleep 0 && sudo pmset -a disablesleep 1";
+        }
       }
     } catch (error) {
       // Fallback to standard command if error getting device info
@@ -368,15 +572,26 @@ const ejectUSBDevice = async (vendorId, productId, platform) => {
 
   console.log("Executing eject command:", command);
   
+  // Check if we have system privileges
+  const hasPrivileges = await checkSystemPrivileges();
+  
   return new Promise((resolve) => {
     exec(command, (error, stdout, stderr) => {
       if (error) {
         console.error(`Error ejecting device on ${platform}: ${error.message}`);
-        resolve({ success: false, message: `Error ejecting device: ${error.message}` });
+        resolve({ 
+          success: false, 
+          message: `Error ejecting device: ${error.message}`,
+          requiresAdmin: !hasPrivileges
+        });
       } else {
         console.log(`Successfully ejected device on ${platform}`);
         console.log("Command output:", stdout);
-        resolve({ success: true, message: 'Device ejected successfully' });
+        resolve({ 
+          success: true, 
+          message: 'Device ejected successfully',
+          requiresAdmin: command.includes('sudo') && !hasPrivileges
+        });
       }
     });
   });
@@ -573,296 +788,3 @@ app.get('/api/system-info', (req, res) => {
       arch: os.arch(),
       hostname: os.hostname(),
       type: os.type(),
-      release: os.release()
-    };
-    
-    res.json(systemInfo);
-  } catch (error) {
-    console.error('Error retrieving system info:', error);
-    res.status(500).json({ error: 'Failed to retrieve system info' });
-  }
-});
-
-// New endpoint to eject a USB device
-app.post('/api/eject-device/:id', async (req, res) => {
-  try {
-    const deviceId = parseInt(req.params.id);
-    const { platform } = req.body;
-    
-    // Find the device in whitelist or blocked attempts
-    const whitelistedDevices = readDataFile(whitelistPath);
-    const blockedAttempts = readDataFile(blockedAttemptsPath);
-    
-    let device = whitelistedDevices.find(d => d.id === deviceId);
-    if (!device) {
-      device = blockedAttempts.find(d => d.id === deviceId);
-    }
-    
-    if (!device) {
-      return res.status(404).json({ error: 'Device not found' });
-    }
-    
-    // Eject the device
-    const result = await ejectUSBDevice(device.vendorId, device.productId, platform);
-    
-    // Log the action
-    const logs = readDataFile(logsPath);
-    const logEntry = {
-      ...device,
-      action: 'Device ejection attempted',
-      status: result.success ? 'info' : 'error',
-      id: Date.now(),
-      date: new Date().toISOString()
-    };
-    logs.unshift(logEntry);
-    writeDataFile(logsPath, logs);
-    
-    // Broadcast the log
-    broadcastUpdate({
-      newLog: logEntry
-    });
-    
-    if (result.success) {
-      res.json({ success: true, message: 'Device ejected successfully' });
-    } else {
-      res.status(500).json({ success: false, message: result.message });
-    }
-  } catch (error) {
-    console.error('Error ejecting USB device:', error);
-    res.status(500).json({ error: 'Failed to eject USB device' });
-  }
-});
-
-// New endpoint to refresh USB devices
-app.post('/api/refresh-devices', async (req, res) => {
-  try {
-    const { platform } = req.body;
-    
-    // Refresh USB devices
-    const result = await refreshUSBDevices(platform);
-    
-    // Log the action
-    const logs = readDataFile(logsPath);
-    const logEntry = {
-      action: 'USB devices refresh attempted',
-      status: result.success ? 'info' : 'error',
-      id: Date.now(),
-      date: new Date().toISOString(),
-      username: 'system'
-    };
-    logs.unshift(logEntry);
-    writeDataFile(logsPath, logs);
-    
-    // Broadcast the log
-    broadcastUpdate({
-      newLog: logEntry
-    });
-    
-    if (result.success) {
-      res.json({ success: true, message: 'USB devices refreshed successfully' });
-    } else {
-      res.status(500).json({ success: false, message: result.message });
-    }
-  } catch (error) {
-    console.error('Error refreshing USB devices:', error);
-    res.status(500).json({ error: 'Failed to refresh USB devices' });
-  }
-});
-
-// New endpoint to force block a USB device
-app.post('/api/force-block-device/:id', async (req, res) => {
-  try {
-    const deviceId = parseInt(req.params.id);
-    const { platform } = req.body;
-    
-    // Find the device in whitelist or blocked attempts
-    const whitelistedDevices = readDataFile(whitelistPath);
-    const blockedAttempts = readDataFile(blockedAttemptsPath);
-    
-    let device = whitelistedDevices.find(d => d.id === deviceId);
-    if (!device) {
-      device = blockedAttempts.find(d => d.id === deviceId);
-    }
-    
-    if (!device) {
-      return res.status(404).json({ error: 'Device not found' });
-    }
-    
-    // Force block the device with enhanced methods
-    const result = await forceBlockUSBDevice(device.vendorId, device.productId, platform);
-    
-    // Log the action
-    const logs = readDataFile(logsPath);
-    const logEntry = {
-      ...device,
-      action: 'Device force-block attempted',
-      status: result ? 'info' : 'error',
-      id: Date.now(),
-      date: new Date().toISOString()
-    };
-    logs.unshift(logEntry);
-    writeDataFile(logsPath, logs);
-    
-    // If device was previously whitelisted, move it to blocked
-    if (whitelistedDevices.some(d => d.id === deviceId)) {
-      // Remove from whitelist
-      const updatedWhitelist = whitelistedDevices.filter(d => d.id !== deviceId);
-      writeDataFile(whitelistPath, updatedWhitelist);
-      
-      // Add to blocked
-      const blockedEntry = {
-        ...device,
-        status: 'blocked',
-        date: new Date().toISOString(),
-        id: Date.now() // Unique ID for blocked entry
-      };
-      blockedAttempts.unshift(blockedEntry);
-      writeDataFile(blockedAttemptsPath, blockedAttempts);
-      
-      // Broadcast update
-      broadcastUpdate({
-        whitelistUpdate: updatedWhitelist,
-        newBlockedAttempt: blockedEntry,
-        newLog: logEntry
-      });
-    } else {
-      // Just broadcast the log
-      broadcastUpdate({
-        newLog: logEntry
-      });
-    }
-    
-    if (result) {
-      res.json({ success: true, message: 'Device blocked successfully with enhanced methods' });
-    } else {
-      res.status(500).json({ success: false, message: 'Enhanced blocking attempt failed, but standard blocking was attempted' });
-    }
-  } catch (error) {
-    console.error('Error force blocking USB device:', error);
-    res.status(500).json({ error: 'Failed to force block USB device' });
-  }
-});
-
-// WebSocket connection handling
-wss.on('connection', (ws) => {
-  console.log('Client connected to WebSocket');
-  
-  ws.on('close', () => {
-    console.log('Client disconnected from WebSocket');
-  });
-});
-
-// Initialize USB detection
-const initUsbDetection = () => {
-  usbDetect.startMonitoring();
-  
-  // Handle device add event
-  usbDetect.on('add', async (device) => {
-    console.log('USB device connected:', device);
-    
-    const { vendorId, productId } = device;
-    const whitelistedDevices = readDataFile(whitelistPath);
-    const allowedClasses = readDataFile(allowedClassesPath);
-    
-    // Get device class information
-    const deviceClass = await getDeviceClass(vendorId, productId);
-    console.log(`Device class for ${vendorId}:${productId} is ${deviceClass}`);
-    
-    // Check if device class is allowed
-    const isClassAllowed = allowedClasses.some(c => c.id.toLowerCase() === deviceClass.toLowerCase());
-    console.log(`Device class ${deviceClass} is ${isClassAllowed ? 'allowed' : 'not allowed'}`);
-    
-    // Check if device is whitelisted
-    const isWhitelisted = whitelistedDevices.some(
-      (d) => d.vendorId === String(vendorId) && d.productId === String(productId)
-    );
-    
-    // Device is allowed if it's whitelisted or its class is allowed
-    const isAllowed = isWhitelisted || isClassAllowed;
-    
-    const logs = readDataFile(logsPath);
-    const logEntry = {
-      vendorId: String(vendorId),
-      productId: String(productId),
-      manufacturer: device.manufacturer || 'Unknown',
-      username: 'system',
-      date: new Date().toISOString(),
-      id: Date.now(),
-      deviceClass,
-      status: isAllowed ? 'allowed' : 'blocked',
-      action: isAllowed ? 
-        (isWhitelisted ? 'Device access allowed (whitelisted)' : 'Device access allowed (class allowed)') : 
-        'Device access blocked'
-    };
-    
-    logs.unshift(logEntry);
-    writeDataFile(logsPath, logs);
-    
-    // If device is not allowed, add to blocked attempts and actually block it
-    if (!isAllowed) {
-      const blockedAttempts = readDataFile(blockedAttemptsPath);
-      const blockedEntry = {
-        ...logEntry,
-        id: Date.now(), // Ensure unique ID
-        deviceClass
-      };
-      
-      blockedAttempts.unshift(blockedEntry);
-      writeDataFile(blockedAttemptsPath, blockedAttempts);
-      
-      // Actually block the device
-      blockUSBDevice(vendorId, productId);
-      
-      // Broadcast the blocked attempt
-      broadcastUpdate({
-        newBlockedAttempt: blockedEntry,
-        newLog: logEntry
-      });
-    } else {
-      // Broadcast the log
-      broadcastUpdate({
-        newLog: logEntry
-      });
-    }
-  });
-  
-  // Handle device remove event
-  usbDetect.on('remove', (device) => {
-    console.log('USB device disconnected:', device);
-    
-    const { vendorId, productId } = device;
-    
-    const logs = readDataFile(logsPath);
-    const logEntry = {
-      vendorId: String(vendorId),
-      productId: String(productId),
-      manufacturer: device.manufacturer || 'Unknown',
-      username: 'system',
-      date: new Date().toISOString(),
-      id: Date.now(),
-      status: 'info',
-      action: 'Device disconnected'
-    };
-    
-    logs.unshift(logEntry);
-    writeDataFile(logsPath, logs);
-    
-    // Broadcast the log
-    broadcastUpdate({
-      newLog: logEntry
-    });
-  });
-};
-
-// Start the server
-server.listen(port, () => {
-  console.log(`USB Monitor backend server running on http://localhost:${port}`);
-  initUsbDetection();
-});
-
-// Cleanup when the application is terminated
-process.on('SIGINT', () => {
-  usbDetect.stopMonitoring();
-  console.log('USB monitoring stopped');
-  process.exit();
-});
