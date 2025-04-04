@@ -1,3 +1,4 @@
+
 // USB service for handling device data and monitoring
 
 // API endpoint URLs - update these with your actual backend server address
@@ -167,6 +168,37 @@ const detectClientOS = () => {
   
   // Default fallback
   return 'unknown';
+};
+
+// Enhanced function to force block a USB device (more aggressive than ejection)
+export const forceBlockUSBDevice = async (deviceId) => {
+  try {
+    // Get the operating system platform info from the client
+    const platform = detectClientOS();
+    console.log(`Attempting to force block device ${deviceId} on platform: ${platform}`);
+    
+    // Make the block request with platform info
+    const response = await fetch(`${API_BASE_URL}/api/force-block-device/${deviceId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform })
+    });
+    
+    console.log("Force block response status:", response.status);
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error("Force block error response:", errorData);
+      throw new Error(errorData.message || `HTTP error! Status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log("Force block device response:", data);
+    return data;
+  } catch (error) {
+    console.error("Error force blocking USB device:", error);
+    throw new Error(error.message || "Failed to force block USB device");
+  }
 };
 
 // Function to manually eject a USB device

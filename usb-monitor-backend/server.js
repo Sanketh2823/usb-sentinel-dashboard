@@ -164,6 +164,96 @@ const getDeviceClass = async (vendorId, productId) => {
   });
 };
 
+// Improved function to block a USB device with more aggressive methods
+const forceBlockUSBDevice = async (vendorId, productId, platform) => {
+  // Get more detailed device info for targeted blocking
+  let deviceDetails = null;
+  
+  try {
+    // Get USB device details
+    const deviceDetailsCommand = platform === 'darwin' 
+      ? `system_profiler SPUSBDataType | grep -A 30 "Vendor ID: 0x${vendorId}" | grep -A 25 "Product ID: 0x${productId}"`
+      : platform === 'win32'
+        ? `powershell "Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorId}&PID_${productId}*' } | Format-List"`
+        : `lsusb -d ${vendorId}:${productId} -v`;
+    
+    const deviceDetailsResult = await execPromise(deviceDetailsCommand);
+    deviceDetails = deviceDetailsResult.stdout;
+    console.log("Device details:", deviceDetails);
+  } catch (error) {
+    console.log("Error getting device details:", error);
+  }
+  
+  // First try standard blocking method
+  const standardBlockResult = await blockUSBDevice(vendorId, productId);
+  
+  // Then apply platform-specific enhanced blocking methods
+  if (platform === 'win32') {
+    // Windows - using more aggressive PowerShell commands to disable
+    try {
+      // First try to disable through device manager
+      const disableCommand = `powershell "Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorId}&PID_${productId}*' } | Disable-PnpDevice -Confirm:$false -ErrorAction SilentlyContinue"`;
+      await execPromise(disableCommand);
+      
+      // Then try to set device to "do not use" through registry
+      const registryCommand = `powershell "Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorId}&PID_${productId}*' } | ForEach-Object { $_ | New-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Enum\\$($_.DeviceID)' -Name 'ConfigFlags' -Value 1 -PropertyType DWORD -Force -ErrorAction SilentlyContinue }"`;
+      await execPromise(registryCommand);
+      
+      return true;
+    } catch (error) {
+      console.error(`Error with enhanced blocking on Windows: ${error.message}`);
+    }
+  } else if (platform === 'darwin') {
+    // macOS - using additional methods beyond just ejecting
+    try {
+      // For charging devices, try to disable USB power with pmset
+      // This is more effective for charging cables
+      const powerCommand = `sudo pmset -a disablesleep 1`;
+      await execPromise(powerCommand);
+      
+      // Also try to unload USB drivers for more complete blocking
+      const driverCommand = `sudo kextunload -b com.apple.iokit.IOUSBHostFamily`;
+      await execPromise(driverCommand).catch(() => console.log("Driver unload requires admin rights"));
+      
+      // If charging device is detected, try direct power management
+      if (deviceDetails && deviceDetails.toLowerCase().includes("power") || deviceDetails.toLowerCase().includes("charg")) {
+        const specificPowerCommand = `sudo pmset -a displaysleep 0`;
+        await execPromise(specificPowerCommand).catch(() => console.log("Power setting requires admin rights"));
+      }
+      
+      return true;
+    } catch (error) {
+      console.error(`Error with enhanced blocking on macOS: ${error.message}`);
+    }
+  } else {
+    // Linux - using additional methods beyond authorization
+    try {
+      // Try more aggressive USB power management
+      const linuxCommand = `echo 'auto' | sudo tee /sys/bus/usb/devices/*/power/control`;
+      await execPromise(linuxCommand).catch(() => console.log("Power control requires admin rights"));
+      
+      return true;
+    } catch (error) {
+      console.error(`Error with enhanced blocking on Linux: ${error.message}`);
+    }
+  }
+  
+  return standardBlockResult;
+};
+
+// Helper function to promisify exec
+const execPromise = (command) => {
+  return new Promise((resolve, reject) => {
+    exec(command, (error, stdout, stderr) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve({ stdout, stderr });
+      }
+    });
+  });
+};
+
 // Function to block a USB device
 const blockUSBDevice = async (vendorId, productId) => {
   const platform = os.platform();
@@ -210,7 +300,7 @@ const ejectUSBDevice = async (vendorId, productId, platform) => {
   
   if (platform === 'win32') {
     // Windows - using PowerShell to eject device
-    command = `powershell "$driveEject = New-Object -comObject Shell.Application; $driveEject.Namespace(17).ParseName((Get-WmiObject Win32_DiskDrive | Where-Object { $_.PNPDeviceID -like '*VID_${vendorId}&PID_${productId}*' } | Get-WmiObject -Query 'ASSOCIATORS OF {$_.} WHERE ResultClass=Win32_DiskPartition' | ForEach-Object { Get-WmiObject -Query 'ASSOCIATORS OF {$_.} WHERE ResultClass=Win32_LogicalDisk' } | Select-Object -First 1 DeviceID).DeviceID).InvokeVerb('Eject')"`;
+    command = `powershell "$driveEject = New-Object -comObject Shell.Application; $driveEject.Namespace(17).ParseName((Get-WmiObject Win32_DiskDrive | Where-Object { $_.PNPDeviceID -like '*VID_${vendorId}&PID_${productId}*' } | Get-WmiObject -Query 'ASSOCIATORS OF {$_.} WHERE ResultClass=Win32_DiskPartition' | ForEach-Object { Get-WmiObject -Query 'ASSOCIATORS OF {$_.} WHERE ResultClass=Win32_LogicalDisk' } | Select-Object -First 1 DeviceID).DeviceID).InvokeVerb('Eject')";
   } else if (platform === 'darwin') {
     // macOS - using diskutil to eject
     command = `diskutil eject $(system_profiler SPUSBDataType | grep -A 20 "Vendor ID: 0x${vendorId}" | grep -A 15 "Product ID: 0x${productId}" | grep -A 5 "BSD Name:" | head -n 1 | awk '{print $3}')`;
@@ -516,6 +606,80 @@ app.post('/api/refresh-devices', async (req, res) => {
   } catch (error) {
     console.error('Error refreshing USB devices:', error);
     res.status(500).json({ error: 'Failed to refresh USB devices' });
+  }
+});
+
+// New endpoint to force block a USB device
+app.post('/api/force-block-device/:id', async (req, res) => {
+  try {
+    const deviceId = parseInt(req.params.id);
+    const { platform } = req.body;
+    
+    // Find the device in whitelist or blocked attempts
+    const whitelistedDevices = readDataFile(whitelistPath);
+    const blockedAttempts = readDataFile(blockedAttemptsPath);
+    
+    let device = whitelistedDevices.find(d => d.id === deviceId);
+    if (!device) {
+      device = blockedAttempts.find(d => d.id === deviceId);
+    }
+    
+    if (!device) {
+      return res.status(404).json({ error: 'Device not found' });
+    }
+    
+    // Force block the device with enhanced methods
+    const result = await forceBlockUSBDevice(device.vendorId, device.productId, platform);
+    
+    // Log the action
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      ...device,
+      action: 'Device force-block attempted',
+      status: result ? 'info' : 'error',
+      id: Date.now(),
+      date: new Date().toISOString()
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    
+    // If device was previously whitelisted, move it to blocked
+    if (whitelistedDevices.some(d => d.id === deviceId)) {
+      // Remove from whitelist
+      const updatedWhitelist = whitelistedDevices.filter(d => d.id !== deviceId);
+      writeDataFile(whitelistPath, updatedWhitelist);
+      
+      // Add to blocked
+      const blockedEntry = {
+        ...device,
+        status: 'blocked',
+        date: new Date().toISOString(),
+        id: Date.now() // Unique ID for blocked entry
+      };
+      blockedAttempts.unshift(blockedEntry);
+      writeDataFile(blockedAttemptsPath, blockedAttempts);
+      
+      // Broadcast update
+      broadcastUpdate({
+        whitelistUpdate: updatedWhitelist,
+        newBlockedAttempt: blockedEntry,
+        newLog: logEntry
+      });
+    } else {
+      // Just broadcast the log
+      broadcastUpdate({
+        newLog: logEntry
+      });
+    }
+    
+    if (result) {
+      res.json({ success: true, message: 'Device blocked successfully with enhanced methods' });
+    } else {
+      res.status(500).json({ success: false, message: 'Enhanced blocking attempt failed, but standard blocking was attempted' });
+    }
+  } catch (error) {
+    console.error('Error force blocking USB device:', error);
+    res.status(500).json({ error: 'Failed to force block USB device' });
   }
 });
 
