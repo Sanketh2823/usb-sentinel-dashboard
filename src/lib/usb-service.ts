@@ -172,15 +172,29 @@ const detectClientOS = () => {
 // Enhanced function to force block a USB device (more aggressive than ejection)
 export const forceBlockUSBDevice = async (deviceId) => {
   try {
+    // Extract vendorId and productId from deviceId
+    let vendorId, productId;
+    
+    if (typeof deviceId === 'object' && deviceId !== null) {
+      // If deviceId is an object with vendorId and productId properties
+      vendorId = deviceId.vendorId;
+      productId = deviceId.productId;
+    } else if (typeof deviceId === 'string' && deviceId.includes(':')) {
+      // If deviceId is a string in the format "vendorId:productId"
+      [vendorId, productId] = deviceId.split(':');
+    } else {
+      throw new Error("Invalid device identifier format");
+    }
+    
     // Get the operating system platform info from the client
     const platform = detectClientOS();
-    console.log(`Attempting to force block device ${deviceId} on platform: ${platform}`);
+    console.log(`Attempting to force block device ${vendorId}:${productId} on platform: ${platform}`);
     
-    // Make the block request with platform info
-    const response = await fetch(`${API_BASE_URL}/api/force-block-device/${deviceId}`, {
+    // Make the block request with vendorId and productId
+    const response = await fetch(`${API_BASE_URL}/api/force-block-device`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ platform })
+      body: JSON.stringify({ vendorId, productId })
     });
     
     console.log("Force block response status:", response.status);
@@ -194,11 +208,6 @@ export const forceBlockUSBDevice = async (deviceId) => {
     const data = await response.json();
     console.log("Force block device response:", data);
     
-    // Check if admin privileges are required
-    if (data.requiresAdmin && data.permissionInstructions) {
-      console.log("Admin privileges required for full blocking:", data.permissionInstructions);
-    }
-    
     return data;
   } catch (error) {
     console.error("Error force blocking USB device:", error);
@@ -209,15 +218,29 @@ export const forceBlockUSBDevice = async (deviceId) => {
 // Function to manually eject a USB device
 export const ejectUSBDevice = async (deviceId) => {
   try {
+    // Extract vendorId and productId from deviceId
+    let vendorId, productId;
+    
+    if (typeof deviceId === 'object' && deviceId !== null) {
+      // If deviceId is an object with vendorId and productId properties
+      vendorId = deviceId.vendorId;
+      productId = deviceId.productId;
+    } else if (typeof deviceId === 'string' && deviceId.includes(':')) {
+      // If deviceId is a string in the format "vendorId:productId"
+      [vendorId, productId] = deviceId.split(':');
+    } else {
+      throw new Error("Invalid device identifier format");
+    }
+    
     // Get the operating system platform info from the client
     const platform = detectClientOS();
-    console.log(`Attempting to eject device ${deviceId} on platform: ${platform}`);
+    console.log(`Attempting to eject device ${vendorId}:${productId} on platform: ${platform}`);
     
-    // Make the eject request with platform info
-    const response = await fetch(`${API_BASE_URL}/api/eject-device/${deviceId}`, {
+    // Make the eject request with vendorId and productId
+    const response = await fetch(`${API_BASE_URL}/api/eject-device`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ platform })
+      body: JSON.stringify({ vendorId, productId })
     });
     
     // Log full response for debugging

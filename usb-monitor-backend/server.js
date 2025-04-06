@@ -453,14 +453,44 @@ const blockUSBDevice = async (vendorId, productId) => {
       return true;
     });
   } else if (platform === 'darwin') {
-    // macOS - using AppleScript to simulate eject or using system commands
-    const command = `diskutil unmount \`diskutil list | grep -i "$(system_profiler SPUSBDataType | grep -A 20 "Vendor ID: 0x${vendorId}" | grep -A 15 "Product ID: 0x${productId}" | grep -A 5 "BSD Name:" | head -n 1 | awk '{print $3}')\``;
-    exec(command, (error, stdout, stderr) => {
-      if (error) {
-        console.error(`Error blocking device on macOS: ${error.message}`);
-        return false;
+    // macOS - using improved command with proper quoting
+    // First check if the device has a BSD name (storage device)
+    const checkCommand = `system_profiler SPUSBDataType | grep -A 20 "Vendor ID: 0x${vendorId}" | grep -A 15 "Product ID: 0x${productId}" | grep "BSD Name:"`;
+    
+    exec(checkCommand, (error, stdout, stderr) => {
+      if (error || !stdout) {
+        // Device doesn't have a BSD name (likely a charging cable)
+        console.log("Device appears to be a non-storage device, attempting power management");
+        
+        // Try power management for charging cables
+        const pmCommand = `sudo pmset -b disablesleep 1 && sudo pmset -a hibernatemode 0`;
+        exec(pmCommand, (pmError, pmStdout, pmStderr) => {
+          if (pmError) {
+            console.error(`Error with power management: ${pmError.message}`);
+          }
+        });
+      } else {
+        // Device has a BSD name, attempt to unmount it
+        // Fixed command with proper quoting
+        const bsdMatch = stdout.match(/BSD Name:\s+(\w+)/);
+        if (bsdMatch && bsdMatch[1]) {
+          const bsdName = bsdMatch[1];
+          console.log(`Found BSD name: ${bsdName}, attempting to unmount`);
+          
+          const unmountCommand = `diskutil unmount ${bsdName}`;
+          exec(unmountCommand, (unmountError, unmountStdout, unmountStderr) => {
+            if (unmountError) {
+              console.error(`Error unmounting device: ${unmountError.message}`);
+              return false;
+            }
+            console.log(`Successfully unmounted device: ${unmountStdout.trim()}`);
+            return true;
+          });
+        } else {
+          console.error("Could not extract BSD name from device info");
+          return false;
+        }
       }
-      return true;
     });
   } else {
     // Linux - using USB authorization or udev rules
