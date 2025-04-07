@@ -1,6 +1,6 @@
 
 const { getDeviceClass } = require('./utils/device');
-const { readDataFile, writeDataFile, whitelistPath, blockedAttemptsPath, logsPath } = require('./config');
+const { readDataFile, writeDataFile, whitelistPath, blockedAttemptsPath, logsPath, allowedClassesPath } = require('./config');
 const { blockUSBDevice } = require('./controllers/usb');
 
 // USB device insertion handler
