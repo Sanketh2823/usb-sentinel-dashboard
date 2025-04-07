@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Shield, List, Plus, Database, Check, X, Filter, Ban, Settings, AlertTriangle } from "lucide-react";
+import { Shield, List, Plus, Database, Check, X, Filter, Ban, Settings, AlertTriangle, Lock } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -9,16 +9,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { fetchUSBDevices, monitorUSBPorts, addDeviceToWhitelist, removeDeviceFromWhitelist, fetchAllowedDeviceClasses, updateAllowedDeviceClasses } from "@/lib/usb-service";
+import { fetchUSBDevices, monitorUSBPorts, addDeviceToWhitelist, removeDeviceFromWhitelist, fetchAllowedDeviceClasses, updateAllowedDeviceClasses, forceBlockUSBDevice, blockUSBDeviceClass } from "@/lib/usb-service";
+
 const Dashboard = () => {
-  const {
-    toast
-  } = useToast();
+  const { toast } = useToast();
   const [showWhitelistDevices, setShowWhitelistDevices] = useState(false);
   const [showBlockedAttempts, setShowBlockedAttempts] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [showAddDeviceModal, setShowAddDeviceModal] = useState(false);
   const [showClassSettingsModal, setShowClassSettingsModal] = useState(false);
+  const [blockingClass, setBlockingClass] = useState("");
+  const [blockingInProgress, setBlockingInProgress] = useState(false);
   const [statusFilter, setStatusFilter] = useState("all");
   const [usernameFilter, setUsernameFilter] = useState("");
   const [whitelistedDevices, setWhitelistedDevices] = useState([]);
@@ -114,6 +115,7 @@ const Dashboard = () => {
     name: "Vendor Specific",
     description: "Vendor specific devices"
   }];
+
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -134,6 +136,7 @@ const Dashboard = () => {
     };
     fetchData();
   }, [toast]);
+
   useEffect(() => {
     let monitoringSubscription;
     const startMonitoring = async () => {
@@ -179,6 +182,7 @@ const Dashboard = () => {
       setIsMonitoring(false);
     };
   }, [toast]);
+
   const handleInputChange = e => {
     const {
       name,
@@ -189,6 +193,7 @@ const Dashboard = () => {
       [name]: value
     }));
   };
+
   const handleAddDevice = async () => {
     try {
       await addDeviceToWhitelist(newDevice);
@@ -218,6 +223,7 @@ const Dashboard = () => {
       });
     }
   };
+
   const handleAddToWhitelist = async device => {
     try {
       await addDeviceToWhitelist(device);
@@ -240,6 +246,7 @@ const Dashboard = () => {
       });
     }
   };
+
   const handleBlockDevice = async deviceId => {
     try {
       await removeDeviceFromWhitelist(deviceId);
@@ -258,12 +265,57 @@ const Dashboard = () => {
       });
     }
   };
+
+  const handleBlockUsbClass = async (classId) => {
+    try {
+      setBlockingInProgress(true);
+      setBlockingClass(classId);
+      
+      toast({
+        title: "Blocking in progress",
+        description: `Attempting to block USB class ${classId}`,
+        variant: "default"
+      });
+      
+      const result = await blockUSBDeviceClass(classId);
+      
+      if (result.success) {
+        toast({
+          title: "Success!",
+          description: `USB class ${classId} blocked successfully`,
+          variant: "default"
+        });
+        
+        const updatedClasses = allowedClasses.filter(c => c.id !== classId);
+        setAllowedClasses(updatedClasses);
+      } else {
+        toast({
+          title: "Warning",
+          description: `Partial success blocking USB class ${classId}: ${result.message}`,
+          variant: "destructive"
+        });
+      }
+    } catch (error) {
+      console.error("Error blocking USB class:", error);
+      toast({
+        title: "Error",
+        description: `Failed to block USB class ${classId}: ${error.message}`,
+        variant: "destructive"
+      });
+    } finally {
+      setBlockingInProgress(false);
+      setBlockingClass("");
+    }
+  };
+
   const handleToggleDeviceClass = async classId => {
     try {
       const isAllowed = allowedClasses.some(c => c.id === classId);
       let updatedClasses;
+      
       if (isAllowed) {
         updatedClasses = allowedClasses.filter(c => c.id !== classId);
+        await handleBlockUsbClass(classId);
       } else {
         const classToAdd = deviceClassesList.find(c => c.id === classId);
         if (classToAdd) {
@@ -272,6 +324,7 @@ const Dashboard = () => {
           updatedClasses = [...allowedClasses];
         }
       }
+      
       await updateAllowedDeviceClasses(updatedClasses);
       setAllowedClasses(updatedClasses);
       toast({
@@ -288,6 +341,7 @@ const Dashboard = () => {
       });
     }
   };
+
   const stats = [{
     title: "Total USB Events",
     value: logs.length.toString(),
@@ -307,6 +361,7 @@ const Dashboard = () => {
     change: `${whitelistedDevices.length} devices`,
     changeType: "positive"
   }];
+
   const filteredLogs = logs.filter(log => {
     if (statusFilter !== "all" && log.status !== statusFilter) {
       return false;
@@ -316,11 +371,13 @@ const Dashboard = () => {
     }
     return true;
   });
+
   const getDeviceClassInfo = classId => {
     if (!classId) return "Unknown";
     const classInfo = deviceClassesList.find(c => c.id.toLowerCase() === classId.toLowerCase());
     return classInfo ? classInfo.name : classId;
   };
+
   return <div className="p-8 max-w-7xl mx-auto">
       <div className="flex justify-between items-center mb-8">
         <div>
@@ -340,8 +397,6 @@ const Dashboard = () => {
           </Button>
         </div>
       </div>
-
-      
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         {stats.map(stat => <div key={stat.title} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:border-primary/20 transition-all duration-200 cursor-pointer" onClick={() => {
@@ -632,22 +687,60 @@ const Dashboard = () => {
             <DialogDescription>
               Select which USB device classes should be allowed on your system.
               Human interface devices like keyboards and mice, webcams, and audio devices are recommended to be allowed.
+              <Alert className="mt-4 bg-amber-50 border-amber-200">
+                <AlertTriangle className="h-4 w-4 text-amber-600" />
+                <AlertDescription>
+                  Blocking device classes requires administrator privileges and may require a restart to take full effect.
+                </AlertDescription>
+              </Alert>
             </DialogDescription>
           </DialogHeader>
           <div className="py-4 max-h-[60vh] overflow-y-auto">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {deviceClassesList.map(deviceClass => {
-              const isAllowed = allowedClasses.some(c => c.id === deviceClass.id);
-              return <div key={deviceClass.id} className={`p-4 border rounded-lg ${isAllowed ? 'border-green-200 bg-green-50' : 'border-gray-200'}`}>
+                const isAllowed = allowedClasses.some(c => c.id === deviceClass.id);
+                const isCurrentlyBlocking = blockingClass === deviceClass.id && blockingInProgress;
+                
+                return (
+                  <div key={deviceClass.id} className={`p-4 border rounded-lg ${isAllowed ? 'border-green-200 bg-green-50' : 'border-gray-200'}`}>
                     <div className="flex items-center space-x-2">
-                      <Checkbox id={`class-${deviceClass.id}`} checked={isAllowed} onCheckedChange={() => handleToggleDeviceClass(deviceClass.id)} />
+                      <Checkbox 
+                        id={`class-${deviceClass.id}`} 
+                        checked={isAllowed} 
+                        onCheckedChange={() => handleToggleDeviceClass(deviceClass.id)}
+                        disabled={blockingInProgress}
+                      />
                       <label htmlFor={`class-${deviceClass.id}`} className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
                         {deviceClass.name} (Class {deviceClass.id})
                       </label>
                     </div>
                     <p className="text-xs text-gray-500 mt-1 ml-6">{deviceClass.description}</p>
-                  </div>;
-            })}
+                    {!isAllowed && (
+                      <div className="mt-2 ml-6">
+                        <Button 
+                          size="sm" 
+                          variant="outline" 
+                          className="text-xs flex items-center"
+                          onClick={() => handleBlockUsbClass(deviceClass.id)}
+                          disabled={blockingInProgress}
+                        >
+                          {isCurrentlyBlocking ? (
+                            <>
+                              <span className="animate-spin mr-1">◌</span>
+                              Blocking...
+                            </>
+                          ) : (
+                            <>
+                              <Lock className="w-3 h-3 mr-1" />
+                              Block Now
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
           <DialogFooter>
@@ -657,4 +750,5 @@ const Dashboard = () => {
       </Dialog>
     </div>;
 };
+
 export default Dashboard;

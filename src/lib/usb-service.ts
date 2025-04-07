@@ -157,16 +157,29 @@ export const updateAllowedDeviceClasses = async (allowedClasses) => {
   }
 };
 
-// Function to determine the client's operating system
-const detectClientOS = () => {
-  const userAgent = navigator.userAgent.toLowerCase();
-  
-  if (userAgent.indexOf('win') !== -1) return 'win32';
-  if (userAgent.indexOf('mac') !== -1) return 'darwin';
-  if (userAgent.indexOf('linux') !== -1) return 'linux';
-  
-  // Default fallback
-  return 'unknown';
+// New function to block a specific USB device class
+export const blockUSBDeviceClass = async (classId) => {
+  try {
+    console.log(`Attempting to block USB device class: ${classId}`);
+    
+    const response = await fetch(`${API_BASE_URL}/api/block-usb-class`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ classId })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.message || `HTTP error! Status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log("Block USB class response:", data);
+    return data;
+  } catch (error) {
+    console.error("Error blocking USB class:", error);
+    throw new Error(error.message || "Failed to block USB class");
+  }
 };
 
 // Enhanced function to force block a USB device (more aggressive than ejection)
@@ -215,7 +228,6 @@ export const forceBlockUSBDevice = async (deviceId) => {
   }
 };
 
-// Function to manually eject a USB device
 export const ejectUSBDevice = async (deviceId) => {
   try {
     // Extract vendorId and productId from deviceId
@@ -261,7 +273,6 @@ export const ejectUSBDevice = async (deviceId) => {
   }
 };
 
-// Function to force refresh USB device list
 export const refreshUSBDevices = async () => {
   try {
     // Get the operating system platform info from the client
@@ -288,6 +299,18 @@ export const refreshUSBDevices = async () => {
     console.error("Error refreshing USB devices:", error);
     throw new Error(error.message || "Failed to refresh USB devices");
   }
+};
+
+// Function to determine the client's operating system
+const detectClientOS = () => {
+  const userAgent = navigator.userAgent.toLowerCase();
+  
+  if (userAgent.indexOf('win') !== -1) return 'win32';
+  if (userAgent.indexOf('mac') !== -1) return 'darwin';
+  if (userAgent.indexOf('linux') !== -1) return 'linux';
+  
+  // Default fallback
+  return 'unknown';
 };
 
 // New function to check system permissions
