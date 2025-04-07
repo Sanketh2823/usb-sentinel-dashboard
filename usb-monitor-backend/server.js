@@ -321,7 +321,7 @@ const blockSpecificUsbDeviceOnMacOS = async (vendorId, productId) => {
     console.log(`Device ${vendorId}:${productId} has class: ${deviceClass}`);
     
     // Step 3: Check if storage device (has BSD name)
-    const bsdCheckCommand = `system_profiler SPUSBDataType | grep -A 20 "Vendor ID: 0x${vendorId}" | grep -A 15 "Product ID: 0x${productId}" | grep -A 5 "BSD Name:"`;
+    const bsdCheckCommand = `system_profiler SPUSBDataType | grep -A 20 "Vendor ID: 0x${vendorId}" | grep -A 15 "Product ID: 0x${productId}" | grep "BSD Name:"`;
     const bsdCheck = await execPromise(bsdCheckCommand).catch(e => ({ stdout: "" }));
     
     if (bsdCheck.stdout && bsdCheck.stdout.includes("BSD Name:")) {
@@ -631,12 +631,12 @@ const ejectUSBDevice = async (vendorId, productId, platform) => {
             command = "sudo pmset -a sleep 0 && sudo pmset -a disablesleep 1";
           }
         } else {
-          // Fallback to standard command if can't get device info
+          // Fallback command if can't get device info
           command = "sudo pmset -a sleep 0 && sudo pmset -a disablesleep 1";
         }
       }
     } catch (error) {
-      // Fallback to standard command if error getting device info
+      // Fallback command if error getting device info
       console.error("Error in device info retrieval:", error);
       command = "diskutil eject $(system_profiler SPUSBDataType | grep -B 5 -A 40 \"Vendor ID: 0x" + vendorId + "\" | grep -B 5 -A 30 \"Product ID: 0x" + productId + "\" | grep -A 5 \"BSD Name:\" | awk '{print $3}' | head -n 1)";
     }
@@ -710,6 +710,73 @@ const broadcastUpdate = (data) => {
 };
 
 // API Endpoints
+
+// Check system permissions endpoint
+app.get('/api/system-permissions', async (req, res) => {
+  try {
+    const hasPrivileges = await checkSystemPrivileges();
+    const permissionInstructions = getPermissionInstructions();
+    
+    res.json({
+      hasSystemPrivileges: hasPrivileges,
+      platform: os.platform(),
+      permissionInstructions
+    });
+  } catch (error) {
+    console.error('Error checking system permissions:', error);
+    res.status(500).json({ error: 'Failed to check system permissions' });
+  }
+});
+
+// Block USB class endpoint
+app.post('/api/block-usb-class', async (req, res) => {
+  try {
+    const { classId } = req.body;
+    if (!classId) {
+      return res.status(400).json({ error: 'Class ID is required' });
+    }
+    
+    const platform = os.platform();
+    let result = { success: false, message: 'Unsupported platform' };
+    
+    console.log(`Attempting to block USB class ${classId} on ${platform}`);
+    
+    if (platform === 'darwin') {
+      // macOS implementation
+      result = await blockUsbClassOnMacOS(classId);
+    } else if (platform === 'win32') {
+      // Windows implementation
+      result = { success: false, message: 'Windows class blocking not yet implemented' };
+    } else {
+      // Linux implementation
+      result = { success: false, message: 'Linux class blocking not yet implemented' };
+    }
+    
+    // Log the action
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      action: `Block USB Class ${classId}`,
+      status: result.success ? 'success' : 'failed',
+      message: result.message,
+      date: new Date().toISOString(),
+      id: Date.now()
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    
+    // Broadcast the update
+    broadcastUpdate({
+      newLog: logEntry
+    });
+    
+    res.json(result);
+  } catch (error) {
+    console.error('Error blocking USB class:', error);
+    res.status(500).json({ error: 'Failed to block USB class', message: error.message });
+  }
+});
+
+// Get USB devices endpoint
 app.get('/api/usb-devices', (req, res) => {
   try {
     const whitelistedDevices = readDataFile(whitelistPath);
@@ -729,7 +796,7 @@ app.get('/api/usb-devices', (req, res) => {
   }
 });
 
-// Get allowed device classes
+// Get allowed device classes endpoint
 app.get('/api/allowed-classes', (req, res) => {
   try {
     const allowedClasses = readDataFile(allowedClassesPath);
@@ -740,7 +807,7 @@ app.get('/api/allowed-classes', (req, res) => {
   }
 });
 
-// Update allowed device classes
+// Update allowed device classes endpoint
 app.post('/api/allowed-classes', (req, res) => {
   try {
     const allowedClasses = req.body;
@@ -758,5 +825,407 @@ app.post('/api/allowed-classes', (req, res) => {
   }
 });
 
-// Add device to whitelist
-app.post('/api/whitelist', (req, res
+// Add device to whitelist endpoint
+app.post('/api/whitelist', (req, res) => {
+  try {
+    const device = req.body;
+    if (!device.vendorId || !device.productId) {
+      return res.status(400).json({ error: 'Vendor ID and Product ID are required' });
+    }
+    
+    const whitelistedDevices = readDataFile(whitelistPath);
+    
+    // Check if device is already whitelisted
+    const isAlreadyWhitelisted = whitelistedDevices.some(
+      (d) => d.vendorId === device.vendorId && d.productId === device.productId
+    );
+    
+    if (!isAlreadyWhitelisted) {
+      // Add device to whitelist
+      whitelistedDevices.push({
+        ...device,
+        dateAdded: new Date().toISOString(),
+        id: Date.now()
+      });
+      
+      writeDataFile(whitelistPath, whitelistedDevices);
+      
+      // Log the action
+      const logs = readDataFile(logsPath);
+      const logEntry = {
+        action: 'Add to Whitelist',
+        device: `${device.name} (${device.vendorId}:${device.productId})`,
+        date: new Date().toISOString(),
+        id: Date.now()
+      };
+      logs.unshift(logEntry);
+      writeDataFile(logsPath, logs);
+      
+      // Broadcast update
+      broadcastUpdate({
+        whitelistUpdate: whitelistedDevices,
+        newLog: logEntry
+      });
+      
+      res.json({ success: true, message: 'Device added to whitelist' });
+    } else {
+      res.json({ success: true, message: 'Device already in whitelist' });
+    }
+  } catch (error) {
+    console.error('Error adding device to whitelist:', error);
+    res.status(500).json({ error: 'Failed to add device to whitelist' });
+  }
+});
+
+// Remove device from whitelist endpoint
+app.delete('/api/whitelist/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const whitelistedDevices = readDataFile(whitelistPath);
+    const deviceIndex = whitelistedDevices.findIndex((d) => d.id === Number(id));
+    
+    if (deviceIndex !== -1) {
+      const removedDevice = whitelistedDevices[deviceIndex];
+      
+      // Remove device from whitelist
+      whitelistedDevices.splice(deviceIndex, 1);
+      writeDataFile(whitelistPath, whitelistedDevices);
+      
+      // Log the action
+      const logs = readDataFile(logsPath);
+      const logEntry = {
+        action: 'Remove from Whitelist',
+        device: `${removedDevice.name} (${removedDevice.vendorId}:${removedDevice.productId})`,
+        date: new Date().toISOString(),
+        id: Date.now()
+      };
+      logs.unshift(logEntry);
+      writeDataFile(logsPath, logs);
+      
+      // Broadcast update
+      broadcastUpdate({
+        whitelistUpdate: whitelistedDevices,
+        newLog: logEntry
+      });
+      
+      res.json({ success: true, message: 'Device removed from whitelist' });
+    } else {
+      res.status(404).json({ error: 'Device not found in whitelist' });
+    }
+  } catch (error) {
+    console.error('Error removing device from whitelist:', error);
+    res.status(500).json({ error: 'Failed to remove device from whitelist' });
+  }
+});
+
+// Clear logs endpoint
+app.delete('/api/logs', (req, res) => {
+  try {
+    writeDataFile(logsPath, []);
+    
+    // Broadcast update
+    broadcastUpdate({
+      logsUpdate: []
+    });
+    
+    res.json({ success: true, message: 'Logs cleared successfully' });
+  } catch (error) {
+    console.error('Error clearing logs:', error);
+    res.status(500).json({ error: 'Failed to clear logs' });
+  }
+});
+
+// Clear blocked attempts endpoint
+app.delete('/api/blocked-attempts', (req, res) => {
+  try {
+    writeDataFile(blockedAttemptsPath, []);
+    
+    // Broadcast update
+    broadcastUpdate({
+      blockedAttemptsUpdate: []
+    });
+    
+    res.json({ success: true, message: 'Blocked attempts cleared successfully' });
+  } catch (error) {
+    console.error('Error clearing blocked attempts:', error);
+    res.status(500).json({ error: 'Failed to clear blocked attempts' });
+  }
+});
+
+// Eject USB device endpoint
+app.post('/api/eject-device', async (req, res) => {
+  try {
+    const { vendorId, productId } = req.body;
+    if (!vendorId || !productId) {
+      return res.status(400).json({ error: 'Vendor ID and Product ID are required' });
+    }
+    
+    const platform = os.platform();
+    
+    // Attempt to eject device
+    const result = await ejectUSBDevice(vendorId, productId, platform);
+    
+    // Log the action
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      action: 'Eject Device',
+      device: `${vendorId}:${productId}`,
+      status: result.success ? 'success' : 'failed',
+      message: result.message,
+      date: new Date().toISOString(),
+      id: Date.now()
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    
+    // Broadcast the update
+    broadcastUpdate({
+      newLog: logEntry
+    });
+    
+    res.json(result);
+  } catch (error) {
+    console.error('Error ejecting device:', error);
+    res.status(500).json({ error: 'Failed to eject device', message: error.message });
+  }
+});
+
+// Block USB device endpoint
+app.post('/api/block-device', async (req, res) => {
+  try {
+    const { vendorId, productId } = req.body;
+    if (!vendorId || !productId) {
+      return res.status(400).json({ error: 'Vendor ID and Product ID are required' });
+    }
+    
+    // Attempt to block device
+    const success = await blockUSBDevice(vendorId, productId);
+    
+    // Log the action
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      action: 'Block Device',
+      device: `${vendorId}:${productId}`,
+      status: success ? 'success' : 'failed',
+      date: new Date().toISOString(),
+      id: Date.now()
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    
+    // Broadcast the update
+    broadcastUpdate({
+      newLog: logEntry
+    });
+    
+    res.json({ success, message: success ? 'Device blocked successfully' : 'Failed to block device' });
+  } catch (error) {
+    console.error('Error blocking device:', error);
+    res.status(500).json({ error: 'Failed to block device', message: error.message });
+  }
+});
+
+// Force block USB device endpoint
+app.post('/api/force-block-device', async (req, res) => {
+  try {
+    const { vendorId, productId } = req.body;
+    if (!vendorId || !productId) {
+      return res.status(400).json({ error: 'Vendor ID and Product ID are required' });
+    }
+    
+    // Attempt to force block device
+    const result = await forceBlockUSBDevice(vendorId, productId);
+    
+    // Log the action
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      action: 'Force Block Device',
+      device: `${vendorId}:${productId}`,
+      status: result.success ? 'success' : 'failed',
+      message: result.message,
+      date: new Date().toISOString(),
+      id: Date.now()
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    
+    // Broadcast the update
+    broadcastUpdate({
+      newLog: logEntry
+    });
+    
+    res.json(result);
+  } catch (error) {
+    console.error('Error force blocking device:', error);
+    res.status(500).json({ error: 'Failed to force block device', message: error.message });
+  }
+});
+
+// Refresh USB devices endpoint
+app.post('/api/refresh-devices', async (req, res) => {
+  try {
+    const platform = os.platform();
+    
+    // Attempt to refresh USB devices
+    const result = await refreshUSBDevices(platform);
+    
+    // Log the action
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      action: 'Refresh USB Devices',
+      status: result.success ? 'success' : 'failed',
+      message: result.message,
+      date: new Date().toISOString(),
+      id: Date.now()
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    
+    // Broadcast the update
+    broadcastUpdate({
+      newLog: logEntry
+    });
+    
+    res.json(result);
+  } catch (error) {
+    console.error('Error refreshing USB devices:', error);
+    res.status(500).json({ error: 'Failed to refresh USB devices', message: error.message });
+  }
+});
+
+// WebSocket connection handling
+wss.on('connection', (ws) => {
+  console.log('Client connected');
+  
+  // Send initial data to the client
+  try {
+    const whitelistedDevices = readDataFile(whitelistPath);
+    const blockedAttempts = readDataFile(blockedAttemptsPath);
+    const logs = readDataFile(logsPath);
+    const allowedClasses = readDataFile(allowedClassesPath);
+    
+    ws.send(JSON.stringify({
+      whitelistedDevices,
+      blockedAttempts,
+      logs,
+      allowedClasses
+    }));
+  } catch (error) {
+    console.error('Error sending initial data:', error);
+  }
+  
+  ws.on('error', console.error);
+  
+  ws.on('close', () => {
+    console.log('Client disconnected');
+  });
+});
+
+// Function to broadcast updates to all connected clients
+const broadcastUpdate = (data) => {
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(data));
+    }
+  });
+};
+
+// Initialize USB detection
+usbDetect.startMonitoring();
+
+// USB device insertion handler
+usbDetect.on('add', async (device) => {
+  console.log(`USB device connected: ${device.vendorId}:${device.productId}`);
+  
+  try {
+    const whitelistedDevices = readDataFile(whitelistPath);
+    const allowedClasses = readDataFile(allowedClassesPath);
+    
+    // Check if device is in whitelist
+    const isWhitelisted = whitelistedDevices.some(
+      (d) => d.vendorId === device.vendorId.toString(16) && d.productId === device.productId.toString(16)
+    );
+    
+    if (!isWhitelisted) {
+      // Get device class
+      const deviceClass = await getDeviceClass(
+        device.vendorId.toString(16),
+        device.productId.toString(16)
+      );
+      
+      // Check if class is allowed
+      const isClassAllowed = allowedClasses.some(
+        (c) => c.id.toLowerCase() === deviceClass.toLowerCase()
+      );
+      
+      if (!isClassAllowed) {
+        console.log(`Blocking non-whitelisted device: ${device.vendorId}:${device.productId} (Class: ${deviceClass})`);
+        
+        // Block the device
+        await blockUSBDevice(
+          device.vendorId.toString(16),
+          device.productId.toString(16)
+        );
+        
+        // Add to blocked attempts
+        const blockedAttempts = readDataFile(blockedAttemptsPath);
+        const deviceInfo = {
+          vendorId: device.vendorId.toString(16),
+          productId: device.productId.toString(16),
+          deviceClass,
+          manufacturer: device.manufacturer || 'Unknown',
+          description: device.description || 'Unknown Device',
+          date: new Date().toISOString(),
+          id: Date.now()
+        };
+        blockedAttempts.unshift(deviceInfo);
+        writeDataFile(blockedAttemptsPath, blockedAttempts);
+        
+        // Log the blocked attempt
+        const logs = readDataFile(logsPath);
+        const logEntry = {
+          action: 'Block Attempt',
+          device: `${deviceInfo.manufacturer || 'Unknown'} ${deviceInfo.description || 'Device'} (${deviceInfo.vendorId}:${deviceInfo.productId})`,
+          deviceClass,
+          date: new Date().toISOString(),
+          id: Date.now()
+        };
+        logs.unshift(logEntry);
+        writeDataFile(logsPath, logs);
+        
+        // Broadcast the updates
+        broadcastUpdate({
+          blockedAttemptsUpdate: blockedAttempts,
+          newLog: logEntry
+        });
+      } else {
+        console.log(`Allowing device with permitted class: ${deviceClass}`);
+      }
+    } else {
+      console.log(`Whitelisted device connected: ${device.vendorId}:${device.productId}`);
+    }
+  } catch (error) {
+    console.error('Error handling USB device connection:', error);
+  }
+});
+
+// USB device removal handler
+usbDetect.on('remove', (device) => {
+  console.log(`USB device disconnected: ${device.vendorId}:${device.productId}`);
+});
+
+// Start the server
+server.listen(port, () => {
+  console.log(`Server is running on port ${port}`);
+  console.log(`Current platform: ${os.platform()}`);
+  
+  checkSystemPrivileges().then((hasPrivileges) => {
+    if (hasPrivileges) {
+      console.log('Running with system privileges');
+    } else {
+      console.log('Running without system privileges - some functionality may be limited');
+      console.log('Run with sudo/admin privileges for full functionality');
+    }
+  });
+});
