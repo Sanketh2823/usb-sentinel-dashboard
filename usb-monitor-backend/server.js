@@ -13,7 +13,8 @@ const setupUsbMonitor = require('./src/usb-monitor');
 const { checkSystemPrivileges } = require('./src/utils/system');
 
 const app = express();
-const port = 3001;
+const DEFAULT_PORT = 3001;
+const port = process.env.PORT || DEFAULT_PORT;
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -35,17 +36,34 @@ setupUsbMonitor(usbDetect, broadcastUpdate);
 // Register routes
 app.use('/api', router);
 
-// Start the server
-server.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
-  console.log(`Current platform: ${os.platform()}`);
+// Error handling for server startup
+const startServer = () => {
+  server.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
+    console.log(`Current platform: ${os.platform()}`);
+    
+    checkSystemPrivileges().then((hasPrivileges) => {
+      if (hasPrivileges) {
+        console.log('Running with system privileges');
+      } else {
+        console.log('Running without system privileges - some functionality may be limited');
+        console.log('Run with sudo/admin privileges for full functionality');
+      }
+    });
+  });
   
-  checkSystemPrivileges().then((hasPrivileges) => {
-    if (hasPrivileges) {
-      console.log('Running with system privileges');
+  server.on('error', (e) => {
+    if (e.code === 'EADDRINUSE') {
+      console.log(`Port ${port} is busy, attempting to use alternative port ${port + 1}`);
+      server.close();
+      // Try the next port
+      process.env.PORT = port + 1;
+      startServer();
     } else {
-      console.log('Running without system privileges - some functionality may be limited');
-      console.log('Run with sudo/admin privileges for full functionality');
+      console.error('Server error:', e);
     }
   });
-});
+};
+
+// Start the server
+startServer();
