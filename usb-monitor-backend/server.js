@@ -22,7 +22,11 @@ let port = process.env.PORT || DEFAULT_PORT;
 const server = http.createServer(app);
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: '*',  // Allow any origin for development
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  credentials: true
+}));
 app.use(express.json());
 
 // Initialize data files
@@ -37,6 +41,11 @@ setupUsbMonitor(usbDetect, broadcastUpdate);
 
 // Register routes
 app.use('/api', router);
+
+// Add a simple health check route
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', port });
+});
 
 // Helper function to check if port is in use
 const isPortInUse = (port) => {
@@ -57,24 +66,30 @@ const isPortInUse = (port) => {
   }
 };
 
-// Error handling for server startup
-const startServer = () => {
-  // Check if port is already in use before trying to listen
-  if (isPortInUse(port)) {
-    console.log(`Port ${port} is already in use. Trying alternative port.`);
-    port++;
+// Get a free port starting from the given one
+const getFreePort = (startPort) => {
+  let currentPort = startPort;
+  
+  while (isPortInUse(currentPort)) {
+    console.log(`Port ${currentPort} is in use, trying next port...`);
+    currentPort++;
     
-    // If we've tried too many ports, give up
-    if (port >= DEFAULT_PORT + MAX_PORT_ATTEMPTS) {
+    if (currentPort >= startPort + MAX_PORT_ATTEMPTS) {
       console.error(`Failed to find an available port after ${MAX_PORT_ATTEMPTS} attempts.`);
       console.error(`Please manually specify a port with the PORT environment variable.`);
       process.exit(1);
     }
-    
-    // Try the next port
-    return startServer();
   }
+  
+  return currentPort;
+};
 
+// Error handling for server startup
+const startServer = () => {
+  // Find a free port before trying to listen
+  port = getFreePort(port);
+  console.log(`Attempting to start server on port ${port}...`);
+  
   server.listen(port, () => {
     console.log(`Server is running on port ${port}`);
     console.log(`Current platform: ${os.platform()}`);
@@ -93,10 +108,8 @@ const startServer = () => {
     if (e.code === 'EADDRINUSE') {
       console.log(`Port ${port} is busy, attempting to use alternative port ${port + 1}`);
       server.close();
-      // Try the next port
       port++;
       
-      // If we've tried too many ports, give up
       if (port >= DEFAULT_PORT + MAX_PORT_ATTEMPTS) {
         console.error(`Failed to find an available port after ${MAX_PORT_ATTEMPTS} attempts.`);
         console.error(`Please manually specify a port with the PORT environment variable.`);
