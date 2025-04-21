@@ -72,21 +72,34 @@ const blockChargingCable = async (device) => {
   }
 };
 
+// Helper: returns true if a device should be blocked (not HID and not whitelisted)
+const shouldBlockDevice = (device, deviceClass, whitelistedDevices) => {
+  // Always allow HID/Mice
+  if (isMouseClass(deviceClass)) return false;
+  // Allow only if in whitelist by vendorId/productId (string hex comparison)
+  return !whitelistedDevices.some(
+    (d) => d.vendorId.toLowerCase() === device.vendorId.toString(16).padStart(4, "0").toLowerCase() &&
+           d.productId.toLowerCase() === device.productId.toString(16).padStart(4, "0").toLowerCase()
+  );
+};
+
 // Universal blocking logic for all non-mouse, non-whitelisted USB devices
 const blockDeviceIfNotWhitelisted = async (device, deviceClass, isWhitelisted, broadcastUpdate) => {
-  if (isWhitelisted) return false;
-  // Mouse/HID (class 03) are exempt and always allowed
+  // Mouse/HID are always allowed
   if (isMouseClass(deviceClass)) {
     console.log(`Device ${device.vendorId}:${device.productId} is class 03 (HID/mouse), allowed.`);
     return false;
   }
+  // Whitelisted devices are allowed
+  if (isWhitelisted) {
+    console.log(`Device ${device.vendorId}:${device.productId} is whitelisted, allowed.`);
+    return false;
+  }
 
-  console.log(`Blocking non-whitelisted, non-HID device: ${device.vendorId}:${device.productId} (Class: ${deviceClass})`);
+  console.log(`Blocking device: ${device.vendorId}:${device.productId} (Class: ${deviceClass})`);
 
   // Try extra block for charging cable if applicable
   const isChargingCable = await blockChargingCable(device);
-
-  // Always call blockUSBDevice (force eject, power management, etc)
   await blockUSBDevice(
     device.vendorId.toString(16),
     device.productId.toString(16)
@@ -95,8 +108,8 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, isWhitelisted, b
   // Add to blocked attempts
   const blockedAttempts = readDataFile(blockedAttemptsPath);
   const deviceInfo = {
-    vendorId: device.vendorId.toString(16),
-    productId: device.productId.toString(16),
+    vendorId: device.vendorId.toString(16).padStart(4, "0"),
+    productId: device.productId.toString(16).padStart(4, "0"),
     deviceClass,
     manufacturer: device.manufacturer || 'Unknown',
     description: device.description || 'Unknown Device',
@@ -138,26 +151,26 @@ const setupUsbMonitor = (usbDetect, broadcastUpdate) => {
   usbDetect.on('add', async (device) => {
     try {
       const whitelistedDevices = readDataFile(whitelistPath);
-      // Check whitelist match (use string hex compare)
-      const isWhitelisted = whitelistedDevices.some(
-        (d) => d.vendorId === device.vendorId.toString(16) 
-            && d.productId === device.productId.toString(16)
-      );
-      // Get device class
+      // Get device class in hex string (as in config)
       const deviceClass = await getDeviceClass(
-        device.vendorId.toString(16),
-        device.productId.toString(16)
+        device.vendorId.toString(16).padStart(4, "0"),
+        device.productId.toString(16).padStart(4, "0")
+      );
+      // Check if whitelisted
+      const isWhitelisted = whitelistedDevices.some(
+        (d) => d.vendorId.toLowerCase() === device.vendorId.toString(16).padStart(4, "0").toLowerCase() &&
+               d.productId.toLowerCase() === device.productId.toString(16).padStart(4, "0").toLowerCase()
       );
 
-      // Only block if not whitelisted, and not HID/mouse
+      // If NOT HID (03) and NOT whitelisted: block
       const wasBlocked = await blockDeviceIfNotWhitelisted(device, deviceClass, isWhitelisted, broadcastUpdate);
 
       if (!wasBlocked) {
-        // Whitelisted or mouse/HID device: allow and log
+        // Allowed device: log it
         const logs = readDataFile(logsPath);
         const logEntry = {
           action: isWhitelisted ? 'Allowed Device Connect' : 'Allowed HID/Mouse Device',
-          device: `${device.manufacturer || 'Unknown'} ${device.description || 'Device'} (${device.vendorId}:${device.productId})`,
+          device: `${device.manufacturer || 'Unknown'} ${device.description || 'Device'} (${device.vendorId.toString(16).padStart(4, "0")}:${device.productId.toString(16).padStart(4, "0")})`,
           deviceClass,
           status: "allowed",
           date: new Date().toISOString(),
