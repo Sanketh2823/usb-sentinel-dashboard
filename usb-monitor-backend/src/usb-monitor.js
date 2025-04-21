@@ -1,20 +1,13 @@
 const { getDeviceClass } = require('./utils/device');
-const { readDataFile, writeDataFile, whitelistPath, blockedAttemptsPath, logsPath, allowedClassesPath } = require('./config');
+const { readDataFile, writeDataFile, whitelistPath, blockedAttemptsPath, logsPath } = require('./config');
 const { blockUSBDevice } = require('./controllers/usb');
 const { execSync } = require('child_process');
 const os = require('os');
 
-// Class constants for clarity
-const HID_CLASS_ID = "03";
+const { isMouseClass, shouldBlockDevice } = require('./helpers/deviceClass');
+const { isWhitelisted } = require('./helpers/whitelist');
 
-// Helper to check if a device is a mouse/HID type
-const isMouseClass = (deviceClass) => {
-  if (!deviceClass) return false;
-  // Accept both string "03" and number 3
-  return deviceClass === HID_CLASS_ID || deviceClass === parseInt(HID_CLASS_ID, 16);
-};
-
-// Enhanced blocking for charging cables (no change)
+// Enhanced blocking for charging cables (unchanged, keep logic)
 const blockChargingCable = async (device) => {
   // Only applies to macOS
   if (os.platform() !== 'darwin') return false;
@@ -72,40 +65,25 @@ const blockChargingCable = async (device) => {
   }
 };
 
-// Helper: returns true if a device should be blocked (not HID and not whitelisted)
-const shouldBlockDevice = (device, deviceClass, whitelistedDevices) => {
-  // Always allow HID/Mice
-  if (isMouseClass(deviceClass)) return false;
-  // Allow only if in whitelist by vendorId/productId (string hex comparison)
-  return !whitelistedDevices.some(
-    (d) => d.vendorId.toLowerCase() === device.vendorId.toString(16).padStart(4, "0").toLowerCase() &&
-           d.productId.toLowerCase() === device.productId.toString(16).padStart(4, "0").toLowerCase()
-  );
-};
-
-// Universal blocking logic for all non-mouse, non-whitelisted USB devices
-const blockDeviceIfNotWhitelisted = async (device, deviceClass, isWhitelisted, broadcastUpdate) => {
-  // Mouse/HID are always allowed
+// Device block logic: allow HID/mouse or whitelisted, else block
+const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevices, broadcastUpdate) => {
   if (isMouseClass(deviceClass)) {
     console.log(`Device ${device.vendorId}:${device.productId} is class 03 (HID/mouse), allowed.`);
     return false;
   }
-  // Whitelisted devices are allowed
-  if (isWhitelisted) {
+  if (isWhitelisted(device, whitelistedDevices)) {
     console.log(`Device ${device.vendorId}:${device.productId} is whitelisted, allowed.`);
     return false;
   }
 
   console.log(`Blocking device: ${device.vendorId}:${device.productId} (Class: ${deviceClass})`);
-
-  // Try extra block for charging cable if applicable
   const isChargingCable = await blockChargingCable(device);
   await blockUSBDevice(
     device.vendorId.toString(16),
     device.productId.toString(16)
   );
 
-  // Add to blocked attempts
+  // Add to blocked attempts + logging
   const blockedAttempts = readDataFile(blockedAttemptsPath);
   const deviceInfo = {
     vendorId: device.vendorId.toString(16).padStart(4, "0"),
@@ -113,7 +91,7 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, isWhitelisted, b
     deviceClass,
     manufacturer: device.manufacturer || 'Unknown',
     description: device.description || 'Unknown Device',
-    isChargingCable: isChargingCable,
+    isChargingCable,
     status: "blocked",
     date: new Date().toISOString(),
     id: Date.now()
@@ -121,7 +99,6 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, isWhitelisted, b
   blockedAttempts.unshift(deviceInfo);
   writeDataFile(blockedAttemptsPath, blockedAttempts);
 
-  // Log entry
   const logs = readDataFile(logsPath);
   const logEntry = {
     action: 'Block Attempt',
@@ -135,7 +112,6 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, isWhitelisted, b
   logs.unshift(logEntry);
   writeDataFile(logsPath, logs);
 
-  // Notify frontend
   broadcastUpdate({
     blockedAttemptsUpdate: blockedAttempts,
     newLog: logEntry
@@ -151,25 +127,18 @@ const setupUsbMonitor = (usbDetect, broadcastUpdate) => {
   usbDetect.on('add', async (device) => {
     try {
       const whitelistedDevices = readDataFile(whitelistPath);
-      // Get device class in hex string (as in config)
       const deviceClass = await getDeviceClass(
         device.vendorId.toString(16).padStart(4, "0"),
         device.productId.toString(16).padStart(4, "0")
       );
-      // Check if whitelisted
-      const isWhitelisted = whitelistedDevices.some(
-        (d) => d.vendorId.toLowerCase() === device.vendorId.toString(16).padStart(4, "0").toLowerCase() &&
-               d.productId.toLowerCase() === device.productId.toString(16).padStart(4, "0").toLowerCase()
-      );
 
-      // If NOT HID (03) and NOT whitelisted: block
-      const wasBlocked = await blockDeviceIfNotWhitelisted(device, deviceClass, isWhitelisted, broadcastUpdate);
+      const wasBlocked = await blockDeviceIfNotWhitelisted(device, deviceClass, whitelistedDevices, broadcastUpdate);
 
       if (!wasBlocked) {
-        // Allowed device: log it
         const logs = readDataFile(logsPath);
+        const isWhite = isWhitelisted(device, whitelistedDevices);
         const logEntry = {
-          action: isWhitelisted ? 'Allowed Device Connect' : 'Allowed HID/Mouse Device',
+          action: isWhite ? 'Allowed Device Connect' : 'Allowed HID/Mouse Device',
           device: `${device.manufacturer || 'Unknown'} ${device.description || 'Device'} (${device.vendorId.toString(16).padStart(4, "0")}:${device.productId.toString(16).padStart(4, "0")})`,
           deviceClass,
           status: "allowed",
