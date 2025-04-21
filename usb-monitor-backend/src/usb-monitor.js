@@ -4,7 +4,17 @@ const { blockUSBDevice } = require('./controllers/usb');
 const { execSync } = require('child_process');
 const os = require('os');
 
-// Enhanced blocking function for macOS charging cables
+// Class constants for clarity
+const HID_CLASS_ID = "03";
+
+// Helper to check if a device is a mouse/HID type
+const isMouseClass = (deviceClass) => {
+  if (!deviceClass) return false;
+  // Accept both string "03" and number 3
+  return deviceClass === HID_CLASS_ID || deviceClass === parseInt(HID_CLASS_ID, 16);
+};
+
+// Enhanced blocking for charging cables (no change)
 const blockChargingCable = async (device) => {
   // Only applies to macOS
   if (os.platform() !== 'darwin') return false;
@@ -62,81 +72,93 @@ const blockChargingCable = async (device) => {
   }
 };
 
-// USB device insertion handler
+// Universal blocking logic for all non-mouse, non-whitelisted USB devices
+const blockDeviceIfNotWhitelisted = async (device, deviceClass, isWhitelisted, broadcastUpdate) => {
+  if (isWhitelisted) return false;
+  // Mouse/HID (class 03) are exempt and always allowed
+  if (isMouseClass(deviceClass)) {
+    console.log(`Device ${device.vendorId}:${device.productId} is class 03 (HID/mouse), allowed.`);
+    return false;
+  }
+
+  console.log(`Blocking non-whitelisted, non-HID device: ${device.vendorId}:${device.productId} (Class: ${deviceClass})`);
+
+  // Try extra block for charging cable if applicable
+  const isChargingCable = await blockChargingCable(device);
+
+  // Always call blockUSBDevice (force eject, power management, etc)
+  await blockUSBDevice(
+    device.vendorId.toString(16),
+    device.productId.toString(16)
+  );
+
+  // Add to blocked attempts
+  const blockedAttempts = readDataFile(blockedAttemptsPath);
+  const deviceInfo = {
+    vendorId: device.vendorId.toString(16),
+    productId: device.productId.toString(16),
+    deviceClass,
+    manufacturer: device.manufacturer || 'Unknown',
+    description: device.description || 'Unknown Device',
+    isChargingCable: isChargingCable,
+    status: "blocked",
+    date: new Date().toISOString(),
+    id: Date.now()
+  };
+  blockedAttempts.unshift(deviceInfo);
+  writeDataFile(blockedAttemptsPath, blockedAttempts);
+
+  // Log entry
+  const logs = readDataFile(logsPath);
+  const logEntry = {
+    action: 'Block Attempt',
+    device: `${deviceInfo.manufacturer || 'Unknown'} ${deviceInfo.description || 'Device'} (${deviceInfo.vendorId}:${deviceInfo.productId})`,
+    deviceClass,
+    deviceType: isChargingCable ? 'Charging Cable' : 'Standard Device',
+    status: "blocked",
+    date: new Date().toISOString(),
+    id: Date.now()
+  };
+  logs.unshift(logEntry);
+  writeDataFile(logsPath, logs);
+
+  // Notify frontend
+  broadcastUpdate({
+    blockedAttemptsUpdate: blockedAttempts,
+    newLog: logEntry
+  });
+
+  return true;
+};
+
 const setupUsbMonitor = (usbDetect, broadcastUpdate) => {
   usbDetect.startMonitoring();
   console.log('USB monitoring started');
 
   usbDetect.on('add', async (device) => {
-    console.log(`USB device connected: ${device.vendorId}:${device.productId}`);
     try {
       const whitelistedDevices = readDataFile(whitelistPath);
-      const allowedClasses = readDataFile(allowedClassesPath);
-
-      // Check if device is in whitelist
+      // Check whitelist match (use string hex compare)
       const isWhitelisted = whitelistedDevices.some(
-        (d) => d.vendorId === device.vendorId.toString(16) && d.productId === device.productId.toString(16)
+        (d) => d.vendorId === device.vendorId.toString(16) 
+            && d.productId === device.productId.toString(16)
+      );
+      // Get device class
+      const deviceClass = await getDeviceClass(
+        device.vendorId.toString(16),
+        device.productId.toString(16)
       );
 
-      if (!isWhitelisted) {
-        // Get device class
-        const deviceClass = await getDeviceClass(
-          device.vendorId.toString(16),
-          device.productId.toString(16)
-        );
-        console.log(`Device ${device.vendorId}:${device.productId} has class: ${deviceClass}`);
+      // Only block if not whitelisted, and not HID/mouse
+      const wasBlocked = await blockDeviceIfNotWhitelisted(device, deviceClass, isWhitelisted, broadcastUpdate);
 
-        // Always block all non-whitelisted devices (regardless of class!)
-        console.log(`Blocking non-whitelisted device: ${device.vendorId}:${device.productId} (Class: ${deviceClass})`);
-        const isChargingCable = await blockChargingCable(device);
-
-        // Force block device via all methods
-        await blockUSBDevice(
-          device.vendorId.toString(16),
-          device.productId.toString(16)
-        );
-
-        // Add to blocked attempts
-        const blockedAttempts = readDataFile(blockedAttemptsPath);
-        const deviceInfo = {
-          vendorId: device.vendorId.toString(16),
-          productId: device.productId.toString(16),
-          deviceClass,
-          manufacturer: device.manufacturer || 'Unknown',
-          description: device.description || 'Unknown Device',
-          isChargingCable: isChargingCable,
-          date: new Date().toISOString(),
-          id: Date.now()
-        };
-        blockedAttempts.unshift(deviceInfo);
-        writeDataFile(blockedAttemptsPath, blockedAttempts);
-
-        // Log the blocked attempt
+      if (!wasBlocked) {
+        // Whitelisted or mouse/HID device: allow and log
         const logs = readDataFile(logsPath);
         const logEntry = {
-          action: 'Block Attempt',
-          device: `${deviceInfo.manufacturer || 'Unknown'} ${deviceInfo.description || 'Device'} (${deviceInfo.vendorId}:${deviceInfo.productId})`,
-          deviceClass,
-          deviceType: isChargingCable ? 'Charging Cable' : 'Standard Device',
-          status: "blocked",
-          date: new Date().toISOString(),
-          id: Date.now()
-        };
-        logs.unshift(logEntry);
-        writeDataFile(logsPath, logs);
-
-        // Broadcast the updates
-        broadcastUpdate({
-          blockedAttemptsUpdate: blockedAttempts,
-          newLog: logEntry
-        });
-      } else {
-        console.log(`Whitelisted device connected: ${device.vendorId}:${device.productId}`);
-        // Optionally, log allowed event
-        const logs = readDataFile(logsPath);
-        const logEntry = {
-          action: 'Allowed Device Connect',
+          action: isWhitelisted ? 'Allowed Device Connect' : 'Allowed HID/Mouse Device',
           device: `${device.manufacturer || 'Unknown'} ${device.description || 'Device'} (${device.vendorId}:${device.productId})`,
+          deviceClass,
           status: "allowed",
           date: new Date().toISOString(),
           id: Date.now()
