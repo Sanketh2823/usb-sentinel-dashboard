@@ -4,7 +4,7 @@ const { blockUSBDevice } = require('./controllers/usb');
 const { execSync } = require('child_process');
 const os = require('os');
 
-const { isMouseClass, shouldBlockDevice } = require('./helpers/deviceClass');
+const { isMouseClass, isStorageClass, isLikelyChargingOnly, shouldBlockDevice } = require('./helpers/deviceClass');
 const { isWhitelisted } = require('./helpers/whitelist');
 
 // Enhanced blocking for charging cables (unchanged, keep logic)
@@ -12,55 +12,18 @@ const blockChargingCable = async (device) => {
   // Only applies to macOS
   if (os.platform() !== 'darwin') return false;
   
-  console.log(`Attempting to block charging cable: ${device.vendorId}:${device.productId}`);
+  console.log(`Checking if this is a charging cable: ${device.vendorId}:${device.productId}`);
   
   try {
-    // Try to identify if this is a charging cable (Apple products often have specific vendor IDs)
-    const isLikelyChargingCable = 
-      // Apple vendor ID for many accessories
-      device.vendorId === 0x05ac || 
-      // Common Apple Watch and iPhone charging vendor IDs 
-      device.vendorId === 0x1452 ||
-      // Check device name for charging-related keywords if available
-      (device.manufacturer && 
-        (device.manufacturer.toLowerCase().includes('apple') || 
-         device.manufacturer.toLowerCase().includes('charging')));
-
-    if (isLikelyChargingCable) {
-      console.log(`Detected likely charging cable: ${device.vendorId}:${device.productId}`);
-      
-      // For charging cables, try multiple blocking approaches
-      // 1. Try USB power management
-      execSync('sudo pmset -a usbpower 0').toString();
-      
-      // 2. Try IOKit power assertions
-      const powerAssertCommand = `sudo ioreg -r -c IOPMrootDomain -n IOPMrootDomain | grep "\\\"ExternalMedia\\\"" | awk '{print $4}' | tr -d '\\n'`;
-      const powerValue = execSync(powerAssertCommand).toString();
-      if (powerValue === 'Yes') {
-        execSync('sudo pmset -a autopoweroff 0').toString();
-      }
-      
-      // 3. Try to identify the specific USB port and disable it
-      const portIdentifyCommand = `system_profiler SPUSBDataType | grep -B 10 -A 20 "Vendor ID: 0x${device.vendorId.toString(16)}" | grep -B 10 -A 10 "Product ID: 0x${device.productId.toString(16)}" | grep "Location ID:" | head -n 1`;
-      const portInfo = execSync(portIdentifyCommand).toString();
-      if (portInfo) {
-        const match = portInfo.match(/Location ID:\s+(0x[0-9a-f]+)/i);
-        if (match && match[1]) {
-          const locationId = match[1];
-          console.log(`Found charging device at location ID: ${locationId}`);
-          
-          // Try to manipulate power delivery for that specific port
-          execSync(`sudo ioreg -r -c AppleUSBDevice | grep -A 20 "${locationId}" | grep "IOPowerManagement" -A 5`).toString();
-        }
-      }
-      
-      console.log('Applied multiple blocking methods for charging cable');
+    // Check if this is a charging cable using our helper
+    if (isLikelyChargingOnly(device)) {
+      console.log(`Detected likely charging cable: ${device.vendorId}:${device.productId} - allowing it`);
       return true;
     }
     
     return false;
   } catch (error) {
-    console.error('Error blocking charging cable:', error);
+    console.error('Error handling charging cable:', error);
     return false;
   }
 };
@@ -71,13 +34,21 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevic
     console.log(`Device ${device.vendorId}:${device.productId} is class 03 (HID/mouse), allowed.`);
     return false;
   }
+  
   if (isWhitelisted(device, whitelistedDevices)) {
     console.log(`Device ${device.vendorId}:${device.productId} is whitelisted, allowed.`);
     return false;
   }
+  
+  // Check if it's just a charging cable
+  const isChargingCable = await blockChargingCable(device);
+  if (isChargingCable) {
+    console.log(`Device ${device.vendorId}:${device.productId} is a charging cable, allowed.`);
+    return false;
+  }
 
   console.log(`Blocking device: ${device.vendorId}:${device.productId} (Class: ${deviceClass})`);
-  const isChargingCable = await blockChargingCable(device);
+  
   await blockUSBDevice(
     device.vendorId.toString(16),
     device.productId.toString(16)
@@ -91,11 +62,13 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevic
     deviceClass,
     manufacturer: device.manufacturer || 'Unknown',
     description: device.description || 'Unknown Device',
-    isChargingCable,
+    isStorage: isStorageClass(deviceClass),
     status: "blocked",
     date: new Date().toISOString(),
     id: Date.now()
   };
+  
+  // Ensure we're actually adding it to the blockedAttempts array
   blockedAttempts.unshift(deviceInfo);
   writeDataFile(blockedAttemptsPath, blockedAttempts);
 
@@ -104,7 +77,7 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevic
     action: 'Block Attempt',
     device: `${deviceInfo.manufacturer || 'Unknown'} ${deviceInfo.description || 'Device'} (${deviceInfo.vendorId}:${deviceInfo.productId})`,
     deviceClass,
-    deviceType: isChargingCable ? 'Charging Cable' : 'Standard Device',
+    deviceType: isStorageClass(deviceClass) ? 'Storage Device' : 'Standard Device',
     status: "blocked",
     date: new Date().toISOString(),
     id: Date.now()
@@ -112,6 +85,7 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevic
   logs.unshift(logEntry);
   writeDataFile(logsPath, logs);
 
+  // Broadcast both the blockedAttempts update and the new log
   broadcastUpdate({
     blockedAttemptsUpdate: blockedAttempts,
     newLog: logEntry
