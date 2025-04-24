@@ -5,7 +5,7 @@ const { execSync } = require('child_process');
 const os = require('os');
 
 const { isMouseClass, isStorageClass, isLikelyChargingOnly, shouldBlockDevice } = require('./helpers/deviceClass');
-const { isWhitelisted } = require('./helpers/whitelist');
+const { isWhitelisted, formatDeviceIds } = require('./helpers/whitelist');
 
 // Enhanced blocking for charging cables (unchanged, keep logic)
 const blockChargingCable = async (device) => {
@@ -56,9 +56,13 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevic
 
   // Add to blocked attempts + logging
   const blockedAttempts = readDataFile(blockedAttemptsPath);
+  
+  // Format IDs for consistent display
+  const formattedDevice = formatDeviceIds(device);
+  
   const deviceInfo = {
-    vendorId: device.vendorId.toString(16).padStart(4, "0"),
-    productId: device.productId.toString(16).padStart(4, "0"),
+    vendorId: formattedDevice.vendorId,
+    productId: formattedDevice.productId,
     deviceClass,
     manufacturer: device.manufacturer || 'Unknown',
     description: device.description || 'Unknown Device',
@@ -67,6 +71,9 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevic
     date: new Date().toISOString(),
     id: Date.now()
   };
+  
+  // Log details for troubleshooting
+  console.log(`Adding to blocked attempts: ${JSON.stringify(deviceInfo)}`);
   
   // Ensure we're actually adding it to the blockedAttempts array
   blockedAttempts.unshift(deviceInfo);
@@ -88,7 +95,8 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevic
   // Broadcast both the blockedAttempts update and the new log
   broadcastUpdate({
     blockedAttemptsUpdate: blockedAttempts,
-    newLog: logEntry
+    newLog: logEntry,
+    newBlockedAttempt: deviceInfo  // Add this to ensure frontend gets notified
   });
 
   return true;
@@ -100,11 +108,16 @@ const setupUsbMonitor = (usbDetect, broadcastUpdate) => {
 
   usbDetect.on('add', async (device) => {
     try {
+      console.log(`USB device connected: ${JSON.stringify(device)}`);
+      
       const whitelistedDevices = readDataFile(whitelistPath);
       const deviceClass = await getDeviceClass(
         device.vendorId.toString(16).padStart(4, "0"),
         device.productId.toString(16).padStart(4, "0")
       );
+
+      // Log detailed device info for debugging
+      console.log(`USB device details - VendorID: ${device.vendorId.toString(16)} (${device.vendorId}), ProductID: ${device.productId.toString(16)} (${device.productId}), Class: ${deviceClass}`);
 
       const wasBlocked = await blockDeviceIfNotWhitelisted(device, deviceClass, whitelistedDevices, broadcastUpdate);
 
