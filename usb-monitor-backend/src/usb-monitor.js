@@ -1,3 +1,4 @@
+
 const { getDeviceClass } = require('./utils/device');
 const { readDataFile, writeDataFile, whitelistPath, blockedAttemptsPath, logsPath } = require('./config');
 const { blockUSBDevice } = require('./controllers/usb');
@@ -5,7 +6,7 @@ const { execSync } = require('child_process');
 const os = require('os');
 
 const { isMouseClass, isStorageClass, isLikelyChargingOnly, shouldBlockDevice } = require('./helpers/deviceClass');
-const { isWhitelisted, formatDeviceIds } = require('./helpers/whitelist');
+const { isWhitelisted, formatDeviceIds, unblockWhitelistedDevice } = require('./helpers/whitelist');
 const { blockSpecificUsbDeviceOnMacOS } = require('./controllers/macos');
 
 // Enhanced blocking for charging cables (unchanged, keep logic)
@@ -40,9 +41,24 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevic
     return false;
   }
   
-  // Check whitelist
+  // Check whitelist - with improved logging
   if (isWhitelisted(device, whitelistedDevices)) {
     console.log(`Device ${formattedDevice.vendorId}:${formattedDevice.productId} is whitelisted, allowed.`);
+    
+    // Log allowed whitelisted device connection
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      action: 'Allowed Device Connect',
+      device: `${device.manufacturer || 'Unknown'} ${device.description || 'Device'} (${formattedDevice.vendorId}:${formattedDevice.productId})`,
+      deviceClass,
+      status: "allowed", // Explicitly mark as allowed
+      date: new Date().toISOString(),
+      id: Date.now()
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    broadcastUpdate({ newLog: logEntry });
+    
     return false;
   }
   

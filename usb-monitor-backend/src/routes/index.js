@@ -1,4 +1,3 @@
-
 const express = require('express');
 const os = require('os');
 const { 
@@ -155,7 +154,7 @@ router.post('/allowed-classes', (req, res) => {
 });
 
 // Add device to whitelist endpoint
-router.post('/whitelist', (req, res) => {
+router.post('/whitelist', async (req, res) => {
   try {
     const device = req.body;
     if (!device.vendorId || !device.productId) {
@@ -164,27 +163,40 @@ router.post('/whitelist', (req, res) => {
     
     const whitelistedDevices = readDataFile(whitelistPath);
     
+    // Format the device IDs for consistency
+    const { formatDeviceIds, unblockWhitelistedDevice } = require('../helpers/whitelist');
+    const formattedDevice = formatDeviceIds(device);
+    
     // Check if device is already whitelisted
     const isAlreadyWhitelisted = whitelistedDevices.some(
-      (d) => d.vendorId === device.vendorId && d.productId === device.productId
+      (d) => d.vendorId.toLowerCase() === formattedDevice.vendorId.toLowerCase() && 
+             d.productId.toLowerCase() === formattedDevice.productId.toLowerCase()
     );
     
     if (!isAlreadyWhitelisted) {
-      // Add device to whitelist
-      whitelistedDevices.push({
-        ...device,
+      // Create a complete device record with proper status
+      const whitelistEntry = {
+        ...formattedDevice,
         dateAdded: new Date().toISOString(),
-        id: Date.now()
-      });
+        id: Date.now(),
+        status: "allowed" // Ensure status is explicitly set to 'allowed'
+      };
       
+      // Add device to whitelist
+      whitelistedDevices.push(whitelistEntry);
       writeDataFile(whitelistPath, whitelistedDevices);
+      
+      // Try to unblock the device since it's now whitelisted
+      const unblockResult = await unblockWhitelistedDevice(formattedDevice);
       
       // Log the action
       const logs = readDataFile(logsPath);
       const logEntry = {
         action: 'Add to Whitelist',
-        device: `${device.name} (${device.vendorId}:${device.productId})`,
+        device: `${device.name || formattedDevice.manufacturer || 'Unknown device'} (${formattedDevice.vendorId}:${formattedDevice.productId})`,
         date: new Date().toISOString(),
+        status: unblockResult ? 'success' : 'partial',
+        message: unblockResult ? 'Device whitelisted and unblocked' : 'Device whitelisted but may need reconnection',
         id: Date.now()
       };
       logs.unshift(logEntry);
@@ -196,13 +208,26 @@ router.post('/whitelist', (req, res) => {
         newLog: logEntry
       });
       
-      res.json({ success: true, message: 'Device added to whitelist' });
+      res.json({ 
+        success: true, 
+        message: unblockResult ? 
+          'Device added to whitelist and unblocked' : 
+          'Device added to whitelist - please disconnect and reconnect to complete' 
+      });
     } else {
-      res.json({ success: true, message: 'Device already in whitelist' });
+      // If already whitelisted, still try to unblock it (user may be trying to fix a blocked device)
+      const unblockResult = await unblockWhitelistedDevice(formattedDevice);
+      
+      res.json({ 
+        success: true, 
+        message: unblockResult ? 
+          'Device already in whitelist - unblock attempt successful' : 
+          'Device already in whitelist - please disconnect and reconnect' 
+      });
     }
   } catch (error) {
     console.error('Error adding device to whitelist:', error);
-    res.status(500).json({ error: 'Failed to add device to whitelist' });
+    res.status(500).json({ error: 'Failed to add device to whitelist', message: error.message });
   }
 });
 
@@ -422,6 +447,115 @@ router.post('/refresh-devices', async (req, res) => {
     res.status(500).json({ error: 'Failed to refresh USB devices', message: error.message });
   }
 });
+
+// Update the block device function in usb-monitor.js to check if device is already whitelisted before blocking
+const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevices, broadcastUpdate) => {
+  // Format device identifiers consistently first
+  const { formatDeviceIds } = require('../helpers/whitelist');
+  const formattedDevice = formatDeviceIds(device);
+  
+  // Always allow HID/mouse devices
+  const { isMouseClass } = require('../helpers/deviceClass');
+  if (isMouseClass(deviceClass)) {
+    console.log(`Device ${formattedDevice.vendorId}:${formattedDevice.productId} is class 03 (HID/mouse), allowed.`);
+    return false;
+  }
+  
+  // Check whitelist - improved for more reliable detection
+  const { isWhitelisted } = require('../helpers/whitelist');
+  if (isWhitelisted(device, whitelistedDevices)) {
+    console.log(`Device ${formattedDevice.vendorId}:${formattedDevice.productId} is whitelisted, allowed.`);
+    
+    // Log the allowed device
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      action: 'Whitelisted Device Connect',
+      device: `${device.manufacturer || 'Unknown'} ${device.description || 'Device'} (${formattedDevice.vendorId}:${formattedDevice.productId})`,
+      deviceClass,
+      status: "allowed",  // Explicitly mark as allowed
+      date: new Date().toISOString(),
+      id: Date.now()
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    broadcastUpdate({ newLog: logEntry });
+    
+    return false;
+  }
+  
+  // Check if it's just a charging cable
+  const { blockChargingCable } = require('../usb-monitor');
+  const isChargingCable = await blockChargingCable(device);
+  if (isChargingCable) {
+    console.log(`Device ${formattedDevice.vendorId}:${formattedDevice.productId} is a charging cable, allowed.`);
+    return false;
+  }
+
+  console.log(`BLOCKING DEVICE: ${formattedDevice.vendorId}:${formattedDevice.productId} (Class: ${deviceClass})`);
+  
+  // More aggressive blocking for macOS
+  const os = require('os');
+  if (os.platform() === 'darwin') {
+    console.log("Using enhanced macOS blocking methods");
+    const { blockSpecificUsbDeviceOnMacOS } = require('../controllers/macos');
+    await blockSpecificUsbDeviceOnMacOS(
+      formattedDevice.vendorId,
+      formattedDevice.productId
+    );
+  }
+  
+  // Also use the standard blocking method as a backup
+  const { blockUSBDevice } = require('../controllers/usb');
+  await blockUSBDevice(
+    formattedDevice.vendorId,
+    formattedDevice.productId
+  );
+
+  // Add to blocked attempts + logging
+  const blockedAttempts = readDataFile(blockedAttemptsPath);
+  
+  const { isStorageClass } = require('../helpers/deviceClass');
+  const deviceInfo = {
+    vendorId: formattedDevice.vendorId,
+    productId: formattedDevice.productId,
+    deviceClass,
+    manufacturer: device.manufacturer || 'Unknown',
+    description: device.description || 'Unknown Device',
+    isStorage: isStorageClass(deviceClass),
+    status: "blocked",
+    date: new Date().toISOString(),
+    id: Date.now()
+  };
+  
+  // Log details for troubleshooting
+  console.log(`Adding to blocked attempts: ${JSON.stringify(deviceInfo)}`);
+  
+  // Ensure we're actually adding it to the blockedAttempts array
+  blockedAttempts.unshift(deviceInfo);
+  writeDataFile(blockedAttemptsPath, blockedAttempts);
+
+  const logs = readDataFile(logsPath);
+  const logEntry = {
+    action: 'Block Attempt',
+    device: `${deviceInfo.manufacturer || 'Unknown'} ${deviceInfo.description || 'Device'} (${deviceInfo.vendorId}:${deviceInfo.productId})`,
+    deviceClass,
+    deviceType: isStorageClass(deviceClass) ? 'Storage Device' : 'Standard Device',
+    status: "blocked",
+    date: new Date().toISOString(),
+    id: Date.now()
+  };
+  logs.unshift(logEntry);
+  writeDataFile(logsPath, logs);
+
+  // Broadcast both the blockedAttempts update and the new log
+  broadcastUpdate({
+    blockedAttemptsUpdate: blockedAttempts,
+    newLog: logEntry,
+    newBlockedAttempt: deviceInfo  // Make sure this is included for the UI update
+  });
+
+  return true;
+};
 
 module.exports = {
   router,
