@@ -14,7 +14,8 @@ function isWhitelisted(device, whitelistedDevices) {
   console.log(`Checking whitelist for device: ${deviceVendorId}:${deviceProductId}`);
   console.log(`Number of whitelisted devices: ${whitelistedDevices.length}`);
   
-  return whitelistedDevices.some(
+  // More strict whitelist checking
+  const isInWhitelist = whitelistedDevices.some(
     (d) => {
       const whitelistedVendorId = d.vendorId.toLowerCase();
       const whitelistedProductId = d.productId.toLowerCase();
@@ -28,6 +29,13 @@ function isWhitelisted(device, whitelistedDevices) {
       return isMatch;
     }
   );
+  
+  // Log whitelist decision for debugging
+  if (!isInWhitelist) {
+    console.log(`Device ${deviceVendorId}:${deviceProductId} is NOT in whitelist`);
+  }
+  
+  return isInWhitelist;
 }
 
 /**

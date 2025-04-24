@@ -6,6 +6,7 @@ const os = require('os');
 
 const { isMouseClass, isStorageClass, isLikelyChargingOnly, shouldBlockDevice } = require('./helpers/deviceClass');
 const { isWhitelisted, formatDeviceIds } = require('./helpers/whitelist');
+const { blockSpecificUsbDeviceOnMacOS } = require('./controllers/macos');
 
 // Enhanced blocking for charging cables (unchanged, keep logic)
 const blockChargingCable = async (device) => {
@@ -28,37 +29,49 @@ const blockChargingCable = async (device) => {
   }
 };
 
-// Device block logic: allow HID/mouse or whitelisted, else block
+// Improved device block logic - more aggressive for macOS
 const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevices, broadcastUpdate) => {
+  // Format device identifiers consistently first
+  const formattedDevice = formatDeviceIds(device);
+  
+  // Always allow HID/mouse devices
   if (isMouseClass(deviceClass)) {
-    console.log(`Device ${device.vendorId}:${device.productId} is class 03 (HID/mouse), allowed.`);
+    console.log(`Device ${formattedDevice.vendorId}:${formattedDevice.productId} is class 03 (HID/mouse), allowed.`);
     return false;
   }
   
+  // Check whitelist
   if (isWhitelisted(device, whitelistedDevices)) {
-    console.log(`Device ${device.vendorId}:${device.productId} is whitelisted, allowed.`);
+    console.log(`Device ${formattedDevice.vendorId}:${formattedDevice.productId} is whitelisted, allowed.`);
     return false;
   }
   
   // Check if it's just a charging cable
   const isChargingCable = await blockChargingCable(device);
   if (isChargingCable) {
-    console.log(`Device ${device.vendorId}:${device.productId} is a charging cable, allowed.`);
+    console.log(`Device ${formattedDevice.vendorId}:${formattedDevice.productId} is a charging cable, allowed.`);
     return false;
   }
 
-  console.log(`Blocking device: ${device.vendorId}:${device.productId} (Class: ${deviceClass})`);
+  console.log(`BLOCKING DEVICE: ${formattedDevice.vendorId}:${formattedDevice.productId} (Class: ${deviceClass})`);
   
+  // More aggressive blocking for macOS
+  if (os.platform() === 'darwin') {
+    console.log("Using enhanced macOS blocking methods");
+    await blockSpecificUsbDeviceOnMacOS(
+      formattedDevice.vendorId,
+      formattedDevice.productId
+    );
+  }
+  
+  // Also use the standard blocking method as a backup
   await blockUSBDevice(
-    device.vendorId.toString(16),
-    device.productId.toString(16)
+    formattedDevice.vendorId,
+    formattedDevice.productId
   );
 
   // Add to blocked attempts + logging
   const blockedAttempts = readDataFile(blockedAttemptsPath);
-  
-  // Format IDs for consistent display
-  const formattedDevice = formatDeviceIds(device);
   
   const deviceInfo = {
     vendorId: formattedDevice.vendorId,
@@ -96,7 +109,7 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevic
   broadcastUpdate({
     blockedAttemptsUpdate: blockedAttempts,
     newLog: logEntry,
-    newBlockedAttempt: deviceInfo  // Add this to ensure frontend gets notified
+    newBlockedAttempt: deviceInfo  // Make sure this is included for the UI update
   });
 
   return true;
