@@ -45,6 +45,14 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevic
   if (isWhitelisted(device, whitelistedDevices)) {
     console.log(`Device ${formattedDevice.vendorId}:${formattedDevice.productId} is whitelisted, allowed.`);
     
+    // Try to unblock the device proactively since it's whitelisted
+    // This helps with devices that were previously blocked but are now whitelisted
+    try {
+      await unblockWhitelistedDevice(device);
+    } catch (error) {
+      console.error("Error during proactive device unblocking:", error);
+    }
+    
     // Log allowed whitelisted device connection
     const logs = readDataFile(logsPath);
     const logEntry = {
@@ -147,6 +155,16 @@ const setupUsbMonitor = (usbDetect, broadcastUpdate) => {
 
       // Log detailed device info for debugging
       console.log(`USB device details - VendorID: ${device.vendorId.toString(16)} (${device.vendorId}), ProductID: ${device.productId.toString(16)} (${device.productId}), Class: ${deviceClass}`);
+
+      // Check immediately if this device is whitelisted, and if so try to unblock it proactively
+      if (isWhitelisted(device, whitelistedDevices)) {
+        console.log(`Device ${device.vendorId.toString(16)}:${device.productId.toString(16)} is whitelisted, ensuring it's unblocked`);
+        try {
+          await unblockWhitelistedDevice(device);
+        } catch (error) {
+          console.error("Error during proactive device unblocking:", error);
+        }
+      }
 
       const wasBlocked = await blockDeviceIfNotWhitelisted(device, deviceClass, whitelistedDevices, broadcastUpdate);
 

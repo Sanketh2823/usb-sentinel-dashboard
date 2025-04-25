@@ -96,51 +96,129 @@ async function unblockWhitelistedDevice(device) {
   
   try {
     if (platform === 'darwin') {
-      // For macOS, attempt to re-enable the device and trigger a device scan
-      console.log("Running macOS unblock procedures");
+      // For macOS, implement more aggressive unblocking procedures
+      console.log("Running enhanced macOS unblock procedures");
       
-      // Try to find and list the device to help with debugging
-      execSync(`system_profiler SPUSBDataType | grep -A 20 -B 5 "Vendor ID: 0x${vendorId}" | grep -A 15 -B 5 "Product ID: 0x${productId}"`, 
-        { encoding: 'utf8', stdio: 'inherit' });
-      
-      // Try to remount via diskutil if it's a storage device
+      // 1. First try to find and list the device to help with debugging
       try {
-        execSync(`diskutil list | grep -i "${vendorId}" || echo "No disk found"`);
-        console.log("Attempting disk remount...");
-        // This will attempt to find disks that might match our device and remount them
-        execSync(`diskutil list | grep -i external | awk '{print $1}' | xargs -I % diskutil mount %`);
+        const deviceInfo = execSync(
+          `system_profiler SPUSBDataType | grep -A 20 -B 5 "Vendor ID: 0x${vendorId}" | grep -A 15 -B 5 "Product ID: 0x${productId}"`, 
+          { encoding: 'utf8' }
+        );
+        console.log("Device info from system profiler:", deviceInfo);
+      } catch (err) {
+        console.log("Device not found in system profiler, may need reconnection");
+      }
+      
+      // 2. Explicitly disable the USB device block rules
+      try {
+        console.log("Removing any existing USB block rules...");
+        // Clear any rules specifically for this device
+        execSync(`sudo rm -f /tmp/usb_block_${vendorId}_${productId}.sh || true`);
+        
+        // Try to clear any host entries blocking this device
+        const hostEntry = `127.0.0.1 ${vendorId}-${productId}.local`;
+        execSync(`sudo sed -i '' '/${vendorId}-${productId}.local/d' /etc/hosts || true`);
+      } catch (err) {
+        console.log("Removing block rules warning:", err.message);
+      }
+      
+      // 3. Enhanced disk remounting for storage devices
+      try {
+        // Look for external disks and try to mount them all
+        console.log("Looking for external disks to mount...");
+        execSync(`diskutil list | grep external || echo "No external disks found"`);
+        
+        // Try to mount all external disks
+        console.log("Attempting to mount all external disks...");
+        const externalDisks = execSync(`diskutil list | grep external | awk '{print $1}' || echo ""`, { encoding: 'utf8' }).trim().split('\n');
+        
+        for (const disk of externalDisks) {
+          if (disk) {
+            try {
+              console.log(`Attempting to mount disk ${disk}...`);
+              execSync(`diskutil mount ${disk} || true`);
+            } catch (err) {
+              console.log(`Warning when mounting ${disk}:`, err.message);
+            }
+          }
+        }
       } catch (diskErr) {
-        console.log("Disk remount attempt complete or not applicable");
+        console.log("Disk remount warnings:", diskErr.message);
       }
       
-      // Try to reset USB ports to force re-enumeration
-      console.log("Attempting USB port reset...");
+      // 4. Aggressive USB reset procedure
       try {
-        // This restarts the USB subsystem by unloading and reloading the IOUSBFamily kernel extension
-        // Note: This won't disconnect other devices as macOS handles this gracefully
-        execSync(`kextunload -b com.apple.iokit.IOUSBHostFamily || true`);
-        execSync(`kextload -b com.apple.iokit.IOUSBHostFamily || true`);
-        console.log("USB subsystem reset complete");
+        console.log("Performing full USB subsystem reset...");
+        
+        // First unload USB storage related extensions
+        execSync(`sudo kextunload -b com.apple.driver.usb.massstorage 2>/dev/null || true`);
+        execSync(`sudo kextunload -b com.apple.iokit.IOUSBMassStorageClass 2>/dev/null || true`);
+        
+        // Then reload them
+        execSync(`sudo kextload -b com.apple.iokit.IOUSBMassStorageClass 2>/dev/null || true`);
+        execSync(`sudo kextload -b com.apple.driver.usb.massstorage 2>/dev/null || true`);
+        
+        // Full USB reset by unloading and reloading the entire USB family
+        execSync(`sudo kextunload -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || true`);
+        execSync(`sudo kextload -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || true`);
+        
+        console.log("USB subsystem reset completed");
       } catch (resetErr) {
-        console.log("USB reset attempt completed with warnings:", resetErr.message);
+        console.log("USB reset warnings:", resetErr.message);
       }
       
+      // 5. Try to revive killed USB monitor processes
+      try {
+        console.log("Restarting USB monitor processes...");
+        execSync(`killall usbd 2>/dev/null || true`);
+      } catch (procErr) {
+        // Ignore errors
+      }
+      
+      console.log("All unblocking procedures completed - device should be accessible now or after reconnection");
       return true;
     } else if (platform === 'win32') {
-      // Windows implementation - Enable previously disabled device
-      console.log("Running Windows unblock procedures");
-      const command = `powershell "Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorId}&PID_${productId}*' -and $_.Status -eq 'Error' } | Enable-PnpDevice -Confirm:$false"`;
-      execSync(command);
+      // Windows implementation - Enhanced to ensure device comes back
+      console.log("Running enhanced Windows unblock procedures");
+      
+      // Try multiple approaches for unblocking
+      try {
+        // First attempt - basic PnP device enable
+        execSync(`powershell "Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorId}&PID_${productId}*' } | Enable-PnpDevice -Confirm:$false"`);
+        
+        // Second attempt - rescan devices
+        execSync(`powershell "Start-Process -Verb runas -FilePath 'pnputil.exe' -ArgumentList '/scan-devices'"`);
+        
+        // Third attempt - force driver reload
+        execSync(`powershell "Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorId}&PID_${productId}*' } | Disable-PnpDevice -Confirm:$false; Start-Sleep -Seconds 2; Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorId}&PID_${productId}*' } | Enable-PnpDevice -Confirm:$false"`);
+      } catch (err) {
+        console.log("Windows unblock warnings:", err.message);
+      }
+      
       return true;
     } else {
-      // Linux implementation - Re-authorize USB device
-      console.log("Running Linux unblock procedures");
-      const command = `echo 1 > /sys/bus/usb/devices/$(lsusb -d ${vendorId}:${productId} | cut -d: -f1 | cut -d' ' -f2)-$(lsusb -d ${vendorId}:${productId} | cut -d: -f2 | cut -d' ' -f1)/authorized`;
-      execSync(command);
+      // Linux implementation - Enhanced for better unblocking
+      console.log("Running enhanced Linux unblock procedures");
+      
+      // Multiple Linux approaches
+      try {
+        // First attempt - direct authorized flag
+        execSync(`find /sys/bus/usb/devices/ -name "idVendor" -exec sh -c 'if grep -q "${vendorId}" {}; then echo 1 > $(dirname {})/authorized; fi' \\; || true`);
+        
+        // Second attempt - USB reset using usbreset tool
+        execSync(`lsusb -d ${vendorId}:${productId} && (echo "Bus and device found, attempting reset"; for bus in /dev/bus/usb/*; do for dev in $bus/*; do if [ -e "$dev" ]; then usbreset ${dev} 2>/dev/null || true; fi; done; done) || echo "Device not found for reset"`);
+        
+        // Third attempt - udev trigger
+        execSync(`sudo udevadm trigger || true`);
+      } catch (err) {
+        console.log("Linux unblock warnings:", err.message);
+      }
+      
       return true;
     }
   } catch (err) {
-    console.error(`Error unblocking device: ${err.message}`);
+    console.error(`Error in enhanced unblocking for device: ${err.message}`);
     return false;
   }
 }
