@@ -13,7 +13,6 @@ function isWhitelisted(device, whitelistedDevices) {
   // Enhanced logging to help debug whitelist issues
   console.log(`Checking whitelist for device: ${deviceVendorId}:${deviceProductId}`);
   console.log(`Number of whitelisted devices: ${whitelistedDevices.length}`);
-  console.log(`Whitelist details: ${JSON.stringify(whitelistedDevices)}`);
   
   // More strict whitelist checking
   const isInWhitelist = whitelistedDevices.some(
@@ -99,84 +98,83 @@ async function unblockWhitelistedDevice(device) {
       // For macOS, implement more aggressive unblocking procedures
       console.log("Running enhanced macOS unblock procedures");
       
-      // 1. First try to find and list the device to help with debugging
+      // 1. IMMEDIATE REMOVAL OF ANY BLOCKING FILES
       try {
-        const deviceInfo = execSync(
-          `system_profiler SPUSBDataType | grep -A 20 -B 5 "Vendor ID: 0x${vendorId}" | grep -A 15 -B 5 "Product ID: 0x${productId}"`, 
-          { encoding: 'utf8' }
-        );
-        console.log("Device info from system profiler:", deviceInfo);
-      } catch (err) {
-        console.log("Device not found in system profiler, may need reconnection");
-      }
-      
-      // 2. Explicitly disable the USB device block rules
-      try {
-        console.log("Removing any existing USB block rules...");
+        console.log("Removing ALL USB block rules for this device...");
         // Clear any rules specifically for this device
-        execSync(`sudo rm -f /tmp/usb_block_${vendorId}_${productId}.sh || true`);
+        execSync(`sudo rm -f /tmp/usb_block_${vendorId}_${productId}.sh 2>/dev/null || true`);
+        execSync(`sudo rm -f /tmp/usb_forget.sh 2>/dev/null || true`);
+        execSync(`sudo rm -f /tmp/usb_block.sh 2>/dev/null || true`);
         
-        // Try to clear any host entries blocking this device
-        const hostEntry = `127.0.0.1 ${vendorId}-${productId}.local`;
-        execSync(`sudo sed -i '' '/${vendorId}-${productId}.local/d' /etc/hosts || true`);
+        // Remove from hosts file if present
+        execSync(`sudo sed -i '' '/${vendorId}-${productId}.local/d' /etc/hosts 2>/dev/null || true`);
+        execSync(`sudo sed -i '' '/USB BLOCK/d' /etc/hosts 2>/dev/null || true`);
       } catch (err) {
         console.log("Removing block rules warning:", err.message);
       }
       
-      // 3. Enhanced disk remounting for storage devices
+      // 2. FORCE IMMEDIATE RESET OF ALL USB SUBSYSTEMS WITH PRIORITY ON THIS DEVICE
       try {
-        // Look for external disks and try to mount them all
-        console.log("Looking for external disks to mount...");
-        execSync(`diskutil list | grep external || echo "No external disks found"`);
+        console.log("Performing complete USB subsystem reset...");
         
-        // Try to mount all external disks
-        console.log("Attempting to mount all external disks...");
-        const externalDisks = execSync(`diskutil list | grep external | awk '{print $1}' || echo ""`, { encoding: 'utf8' }).trim().split('\n');
+        // First try to enable the device directly (if visible)
+        execSync(`ioreg -p IOUSB -l | grep -B 10 -A 30 "idVendor.*0x${vendorId}" | grep -B 10 -A 20 "idProduct.*0x${productId}" || true`);
         
-        for (const disk of externalDisks) {
-          if (disk) {
-            try {
-              console.log(`Attempting to mount disk ${disk}...`);
-              execSync(`diskutil mount ${disk} || true`);
-            } catch (err) {
-              console.log(`Warning when mounting ${disk}:`, err.message);
+        // Then unload ALL storage related drivers to clear any blocks
+        execSync(`sudo kextunload -b com.apple.driver.usb.massstorage 2>/dev/null || true`);
+        execSync(`sudo kextunload -b com.apple.iokit.IOUSBMassStorageClass 2>/dev/null || true`);
+        
+        // Force unmount any external drives that might be in a locked state
+        execSync(`diskutil list | grep external | awk '{print $1}' | xargs -I{} sudo diskutil unmountDisk force {} 2>/dev/null || true`);
+        
+        // Then reload the drivers
+        execSync(`sudo kextload -b com.apple.iokit.IOUSBMassStorageClass 2>/dev/null || true`);
+        execSync(`sudo kextload -b com.apple.driver.usb.massstorage 2>/dev/null || true`);
+        
+        // Force remount of ALL external drives
+        execSync(`diskutil list | grep external | awk '{print $1}' | xargs -I{} diskutil mountDisk {} 2>/dev/null || true`);
+        
+        // Full USB reset with complete unload/reload - CRITICAL for macOS
+        execSync(`sudo kextunload -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || true`);
+        execSync(`sudo kextload -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || true`);
+        
+        // Kill and restart USB-related system processes to ensure changes apply
+        execSync(`killall usbd 2>/dev/null || true`);
+        
+        console.log("USB subsystem completely reset");
+      } catch (resetErr) {
+        console.log("USB reset applied with warnings:", resetErr.message);
+      }
+      
+      // 3. Try additional disk mounting strategies
+      try {
+        // Look for all available external disks
+        console.log("Performing aggressive disk recovery for external storage...");
+        const diskOutput = execSync(`diskutil list | grep external || echo ""`, { encoding: 'utf8' });
+        if (diskOutput.trim()) {
+          const externalDisks = diskOutput.trim().split('\n');
+          
+          for (const diskLine of externalDisks) {
+            if (diskLine) {
+              const match = diskLine.match(/\s(disk\d+s?\d*)/);
+              if (match && match[1]) {
+                const disk = match[1];
+                console.log(`Attempting to recover and mount disk ${disk}`);
+                
+                // Try multiple mount strategies
+                execSync(`diskutil unmountDisk force /dev/${disk} 2>/dev/null || true`);
+                execSync(`diskutil repairDisk /dev/${disk} 2>/dev/null || true`);
+                execSync(`diskutil mountDisk /dev/${disk} 2>/dev/null || true`);
+                execSync(`diskutil mount /dev/${disk} 2>/dev/null || true`);
+              }
             }
           }
         }
       } catch (diskErr) {
-        console.log("Disk remount warnings:", diskErr.message);
+        console.log("Disk recovery completed with warnings:", diskErr.message);
       }
       
-      // 4. Aggressive USB reset procedure
-      try {
-        console.log("Performing full USB subsystem reset...");
-        
-        // First unload USB storage related extensions
-        execSync(`sudo kextunload -b com.apple.driver.usb.massstorage 2>/dev/null || true`);
-        execSync(`sudo kextunload -b com.apple.iokit.IOUSBMassStorageClass 2>/dev/null || true`);
-        
-        // Then reload them
-        execSync(`sudo kextload -b com.apple.iokit.IOUSBMassStorageClass 2>/dev/null || true`);
-        execSync(`sudo kextload -b com.apple.driver.usb.massstorage 2>/dev/null || true`);
-        
-        // Full USB reset by unloading and reloading the entire USB family
-        execSync(`sudo kextunload -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || true`);
-        execSync(`sudo kextload -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || true`);
-        
-        console.log("USB subsystem reset completed");
-      } catch (resetErr) {
-        console.log("USB reset warnings:", resetErr.message);
-      }
-      
-      // 5. Try to revive killed USB monitor processes
-      try {
-        console.log("Restarting USB monitor processes...");
-        execSync(`killall usbd 2>/dev/null || true`);
-      } catch (procErr) {
-        // Ignore errors
-      }
-      
-      console.log("All unblocking procedures completed - device should be accessible now or after reconnection");
+      console.log("All unblocking procedures completed - device should be accessible now");
       return true;
     } else if (platform === 'win32') {
       // Windows implementation - Enhanced to ensure device comes back
@@ -184,16 +182,20 @@ async function unblockWhitelistedDevice(device) {
       
       // Try multiple approaches for unblocking
       try {
-        // First attempt - basic PnP device enable
-        execSync(`powershell "Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorId}&PID_${productId}*' } | Enable-PnpDevice -Confirm:$false"`);
+        // Comprehensive approach that rebuilds the USB stack
+        // First remove any device blocks
+        execSync(`powershell "Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorId}&PID_${productId}*' -and $_.Status -eq 'Error' } | Enable-PnpDevice -Confirm:$false"`);
         
-        // Second attempt - rescan devices
-        execSync(`powershell "Start-Process -Verb runas -FilePath 'pnputil.exe' -ArgumentList '/scan-devices'"`);
-        
-        // Third attempt - force driver reload
+        // Then fully disable and re-enable the device to reset its state
         execSync(`powershell "Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorId}&PID_${productId}*' } | Disable-PnpDevice -Confirm:$false; Start-Sleep -Seconds 2; Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorId}&PID_${productId}*' } | Enable-PnpDevice -Confirm:$false"`);
+        
+        // Force Windows to rescan all devices
+        execSync(`powershell "pnputil /scan-devices"`);
+        
+        // Restart USB controllers to clear any lingering issues
+        execSync(`powershell "$controllers = Get-PnpDevice | Where-Object {$_.Class -eq 'USB' -and $_.FriendlyName -like '*controller*'}; foreach ($controller in $controllers) { $controller | Disable-PnpDevice -Confirm:$false; Start-Sleep -Seconds 2; $controller | Enable-PnpDevice -Confirm:$false }"`);
       } catch (err) {
-        console.log("Windows unblock warnings:", err.message);
+        console.log("Windows unblock applied with warnings:", err.message);
       }
       
       return true;
@@ -203,16 +205,19 @@ async function unblockWhitelistedDevice(device) {
       
       // Multiple Linux approaches
       try {
-        // First attempt - direct authorized flag
-        execSync(`find /sys/bus/usb/devices/ -name "idVendor" -exec sh -c 'if grep -q "${vendorId}" {}; then echo 1 > $(dirname {})/authorized; fi' \\; || true`);
+        // Set authorized flag to 1 for this specific device
+        execSync(`find /sys/bus/usb/devices/ -name "idVendor" -exec sh -c 'if grep -q "${vendorId}" {}; then dirname_path=$(dirname {}); if grep -q "${productId}" "$dirname_path/idProduct"; then echo 1 > "$dirname_path/authorized"; fi; fi' \\; || true`);
         
-        // Second attempt - USB reset using usbreset tool
-        execSync(`lsusb -d ${vendorId}:${productId} && (echo "Bus and device found, attempting reset"; for bus in /dev/bus/usb/*; do for dev in $bus/*; do if [ -e "$dev" ]; then usbreset ${dev} 2>/dev/null || true; fi; done; done) || echo "Device not found for reset"`);
+        // Force system-wide USB reset
+        execSync(`sudo udevadm control --reload-rules && sudo udevadm trigger`);
         
-        // Third attempt - udev trigger
-        execSync(`sudo udevadm trigger || true`);
+        // Restart USB subsystem (more aggressive approach)
+        execSync(`sudo rmmod usb_storage && sudo modprobe usb_storage || true`);
+        
+        // Force remount of any storage devices
+        execSync(`lsblk -o NAME,VENDOR,MODEL | grep -i "${vendorId}" | awk '{print $1}' | xargs -I{} sudo mount -a || true`);
       } catch (err) {
-        console.log("Linux unblock warnings:", err.message);
+        console.log("Linux unblock applied with warnings:", err.message);
       }
       
       return true;

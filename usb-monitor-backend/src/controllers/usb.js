@@ -68,12 +68,6 @@ const blockUSBDevice = async (vendorId, productId) => {
                 }
               }
             });
-            // As fallback, try to force sleep/wake or port limiting as last resort (won't affect whitelist, but blocks unhandled)
-            exec(`sudo pmset -a disablesleep 1 ; sudo pmset -a autopoweroff 0`, (pmErr, pmStdOut, pmStdErr) => {
-              if (pmErr) {
-                console.log("pmset block fallback failed:", pmErr);
-              }
-            });
           });
         }
       });

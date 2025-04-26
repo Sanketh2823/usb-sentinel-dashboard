@@ -45,12 +45,26 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevic
   if (isWhitelisted(device, whitelistedDevices)) {
     console.log(`Device ${formattedDevice.vendorId}:${formattedDevice.productId} is whitelisted, allowed.`);
     
-    // Try to unblock the device proactively since it's whitelisted
-    // This helps with devices that were previously blocked but are now whitelisted
+    // CRITICAL CHANGE: Aggressively unblock the device immediately since it's whitelisted
+    // This helps devices that were previously blocked but are now whitelisted
     try {
+      console.log("CRITICAL: Executing immediate unblock for whitelisted device");
       await unblockWhitelistedDevice(device);
+      
+      // After unblocking, update the whitelist status to "allowed" if needed
+      const existingDeviceIndex = whitelistedDevices.findIndex(
+        d => d.vendorId.toLowerCase() === formattedDevice.vendorId && 
+             d.productId.toLowerCase() === formattedDevice.productId
+      );
+      
+      if (existingDeviceIndex >= 0 && whitelistedDevices[existingDeviceIndex].status !== "allowed") {
+        whitelistedDevices[existingDeviceIndex].status = "allowed";
+        writeDataFile(whitelistPath, whitelistedDevices);
+        broadcastUpdate({ whitelistUpdate: whitelistedDevices });
+        console.log("Updated whitelist device status to 'allowed'");
+      }
     } catch (error) {
-      console.error("Error during proactive device unblocking:", error);
+      console.error("Error during critical device unblocking:", error);
     }
     
     // Log allowed whitelisted device connection
@@ -156,13 +170,28 @@ const setupUsbMonitor = (usbDetect, broadcastUpdate) => {
       // Log detailed device info for debugging
       console.log(`USB device details - VendorID: ${device.vendorId.toString(16)} (${device.vendorId}), ProductID: ${device.productId.toString(16)} (${device.productId}), Class: ${deviceClass}`);
 
-      // Check immediately if this device is whitelisted, and if so try to unblock it proactively
+      // CRITICAL CHANGE: Check immediately if this device is whitelisted, and if so try to unblock it AGGRESSIVELY
       if (isWhitelisted(device, whitelistedDevices)) {
         console.log(`Device ${device.vendorId.toString(16)}:${device.productId.toString(16)} is whitelisted, ensuring it's unblocked`);
         try {
+          console.log("CRITICAL: Executing forced immediate unblock for whitelisted device on new connection");
           await unblockWhitelistedDevice(device);
+          
+          // IMPORTANT: Update status to "allowed" in the whitelist if needed
+          const formattedDevice = formatDeviceIds(device);
+          const existingDeviceIndex = whitelistedDevices.findIndex(
+            d => d.vendorId.toLowerCase() === formattedDevice.vendorId && 
+                 d.productId.toLowerCase() === formattedDevice.productId
+          );
+          
+          if (existingDeviceIndex >= 0) {
+            whitelistedDevices[existingDeviceIndex].status = "allowed";
+            writeDataFile(whitelistPath, whitelistedDevices);
+            broadcastUpdate({ whitelistUpdate: whitelistedDevices });
+            console.log("Updated whitelist device status to 'allowed'");
+          }
         } catch (error) {
-          console.error("Error during proactive device unblocking:", error);
+          console.error("Error during critical device unblocking:", error);
         }
       }
 

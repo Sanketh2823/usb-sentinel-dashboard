@@ -1,4 +1,3 @@
-
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
@@ -32,7 +31,7 @@ app.use(express.json());
 // Initialize data files
 initializeDataFiles();
 
-// Set up WebSocket server
+// Set up WebSocket server with automatic reconnection handling
 const wss = setupWebSocket(server);
 setBroadcastWss(wss);
 
@@ -45,6 +44,11 @@ app.use('/api', router);
 // Add a simple health check route
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', port });
+});
+
+// Add a heartbeat route to check if server is alive
+app.get('/heartbeat', (req, res) => {
+  res.json({ timestamp: new Date().toISOString() });
 });
 
 // Helper function to check if port is in use
@@ -84,7 +88,7 @@ const getFreePort = (startPort) => {
   return currentPort;
 };
 
-// Error handling for server startup
+// Modified server startup with enhanced stability
 const startServer = () => {
   // Find a free port before trying to listen
   port = getFreePort(port);
@@ -94,6 +98,9 @@ const startServer = () => {
     console.log(`Server is running on port ${port}`);
     console.log(`Current platform: ${os.platform()}`);
     
+    // Print WebSocket details
+    console.log(`WebSocket server running at ws://localhost:${port}`);
+    
     checkSystemPrivileges().then((hasPrivileges) => {
       if (hasPrivileges) {
         console.log('Running with system privileges');
@@ -102,6 +109,21 @@ const startServer = () => {
         console.log('Run with sudo/admin privileges for full functionality');
       }
     });
+    
+    // Set up server keep-alive mechanisms
+    setInterval(() => {
+      // Ping all WebSocket clients to keep connections alive
+      wss.clients.forEach(client => {
+        try {
+          if (client.readyState === 1) { // if open
+            client.ping();
+            client.send(JSON.stringify({ type: 'heartbeat', timestamp: new Date().toISOString() }));
+          }
+        } catch (e) {
+          console.error('WebSocket ping error:', e);
+        }
+      });
+    }, 15000); // Every 15 seconds
   });
   
   server.on('error', (e) => {
@@ -123,6 +145,17 @@ const startServer = () => {
     }
   });
 };
+
+// Set up process error handling for stability
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
+  // Don't exit - try to keep the server running
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled rejection at:', promise, 'reason:', reason);
+  // Don't exit - try to keep the server running
+});
 
 // Start the server
 startServer();
