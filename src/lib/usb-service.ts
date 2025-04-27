@@ -150,6 +150,7 @@ export const addDeviceToWhitelist = async (device) => {
 export const removeDeviceFromWhitelist = async (deviceId) => {
   try {
     console.log(`Removing device from whitelist with ID: ${deviceId}`);
+    const API_BASE_URL = getApiBaseUrl();
     const response = await fetch(`${API_BASE_URL}/api/whitelist/${deviceId}`, {
       method: 'DELETE',
     });
@@ -402,7 +403,7 @@ export const monitorUSBPorts = async (callback) => {
     
     const API_BASE_URL = getApiBaseUrl();
     const wsBaseUrl = API_BASE_URL.replace('http://', 'ws://');
-    const socket = new WebSocket(`${wsBaseUrl}/usb-events`);
+    let socket = new WebSocket(`${wsBaseUrl}/usb-events`);
     
     let reconnectAttempts = 0;
     let reconnectInterval = null;
@@ -439,8 +440,7 @@ export const monitorUSBPorts = async (callback) => {
         newSocket.onerror = socket.onerror;
         newSocket.onclose = socket.onclose;
         
-        // Replace the old socket with the new one
-        socket = newSocket;
+        socket = newSocket; // Use let instead of const for socket
       } catch (error) {
         console.error("Error reconnecting WebSocket:", error);
       }

@@ -1,8 +1,8 @@
-
 const os = require('os');
-const { execPromise } = require('../utils/system');
-const { getDeviceClass } = require('../utils/device');
 const { exec } = require('child_process');
+const deviceManager = require('./device-manager');
+const { getDeviceClass } = require('../utils/device');
+const { execPromise } = require('../utils/system');
 
 // Implement enhanced macOS USB class blocking using IOKit/kext commands and System Extensions
 const blockUsbClassOnMacOS = async (classId) => {
@@ -131,144 +131,36 @@ const blockUsbClassOnMacOS = async (classId) => {
 
 // Implement enhanced macOS USB device blocking with multiple fallback strategies
 const blockSpecificUsbDeviceOnMacOS = async (vendorId, productId) => {
-  console.log(`Attempting to block specific USB device ${vendorId}:${productId} on macOS with enhanced methods`);
+  console.log(`Attempting to block specific USB device ${vendorId}:${productId} on macOS`);
   
   try {
-    // Standardize vendorId and productId format
-    vendorId = vendorId.toLowerCase().replace(/^0x/, '');
-    productId = productId.toLowerCase().replace(/^0x/, '');
+    // First cleanup any existing blocking files for this device
+    await deviceManager.cleanupBlockingFiles();
     
-    console.log(`Using standardized IDs for blocking: ${vendorId}:${productId}`);
+    // Block the specific device
+    await deviceManager.blockDevice(vendorId, productId);
     
-    // Step 1: Enhanced device information gathering
-    console.log("Getting detailed device information");
-    const deviceInfoCommands = [
-      `ioreg -p IOUSB -l -w 0 | grep -B 10 -A 30 "idVendor.*0x${vendorId}" | grep -B 10 -A 20 "idProduct.*0x${productId}"`,
-      `system_profiler SPUSBDataType | grep -B 10 -A 40 "Vendor ID: 0x${vendorId}" | grep -B 10 -A 30 "Product ID: 0x${productId}"`
-    ];
-    
-    let deviceInfo = "";
-    let locationId = null;
-    let bsdName = null;
-    
-    // Try multiple methods to get device info
-    for (const cmd of deviceInfoCommands) {
-      const result = await execPromise(cmd).catch(() => ({ stdout: "" }));
-      if (result.stdout) {
-        deviceInfo = result.stdout;
-        
-        // Extract location ID if available
-        const locMatch = deviceInfo.match(/locationID"\s+=\s+([0-9a-fx]+)/i) || 
-                        deviceInfo.match(/Location ID:\s+([0-9a-fx]+)/i);
-        
-        if (locMatch && locMatch[1]) {
-          locationId = locMatch[1].trim();
-          console.log(`Found device location ID: ${locationId}`);
-        }
-        
-        // Extract BSD name if available (storage device)
-        const bsdMatch = deviceInfo.match(/BSD Name:\s+(\w+)/i);
-        if (bsdMatch && bsdMatch[1]) {
-          bsdName = bsdMatch[1].trim();
-          console.log(`Found storage device BSD name: ${bsdName}`);
-        }
-        
-        break;
-      }
-    }
-    
-    // Step 2: Get device class for targeted blocking
-    console.log("Determining device class for targeted blocking");
+    // Get device class for targeted blocking
     const deviceClass = await getDeviceClass(vendorId, productId);
-    console.log(`Device ${vendorId}:${productId} has class: ${deviceClass}`);
     
-    // Step 3: Apply multiple blocking methods in sequence for maximum effectiveness
-    
-    // 3.1: Storage-specific blocking
-    if (bsdName || deviceClass === "08") {
-      console.log("Applying storage-specific blocking methods");
+    if (deviceClass === "08") { // Mass Storage
+      console.log("Blocking USB Mass Storage device");
+      // Try unmounting if it's a storage device
+      const { stdout: deviceInfo } = await execPromise(
+        `system_profiler SPUSBDataType | grep -B 10 -A 30 "Vendor ID: 0x${vendorId}"`
+      );
       
-      // Try multiple unmount methods
-      if (bsdName) {
-        const unmountCommands = [
-          `sudo diskutil unmountDisk force /dev/${bsdName}`,
-          `sudo diskutil eject force /dev/${bsdName}`,
-          `sudo umount -f /dev/${bsdName}`
-        ];
-        
-        for (const cmd of unmountCommands) {
-          await execPromise(cmd).catch(() => {});
+      if (deviceInfo.includes("BSD Name:")) {
+        const bsdMatch = deviceInfo.match(/BSD Name:\s+(\w+)/);
+        if (bsdMatch && bsdMatch[1]) {
+          await execPromise(`diskutil unmountDisk force /dev/${bsdMatch[1]}`).catch(() => {});
         }
       }
-      
-      // Try to unload storage drivers
-      await execPromise("sudo kextunload -b com.apple.driver.usb.massstorage").catch(() => {});
-      await execPromise("sudo kextunload -b com.apple.iokit.IOUSBMassStorageClass").catch(() => {});
-      
-      // Create usbkill entry in /etc/hosts to block mass storage
-      const hostEntry = `# USB BLOCK\n127.0.0.1 ${vendorId}-${productId}.local`;
-      await execPromise(`sudo sh -c 'echo "${hostEntry}" >> /etc/hosts'`).catch(() => {});
     }
     
-    // 3.2: Location-based blocking (if we found locationID)
-    if (locationId) {
-      console.log(`Applying location-based blocking for location ID: ${locationId}`);
-      
-      // Create a direct USB port power management block using IOKit registry access
-      const portCmd = `ioreg -p IOUSB -l -w 0 | grep -A 20 "${locationId}"`;
-      await execPromise(portCmd).catch(() => {});
-      
-      // IORegistry device power state change would require a native helper app
-      // Here's a placeholder with a shell approach that can help in some cases
-      const powerCmd = `
-      sudo defaults write /Library/Preferences/SystemConfiguration/com.apple.PowerManagement.plist "USB Power Device" -dict '{"${locationId}" = 0; }'
-      `;
-      await execPromise(powerCmd).catch(() => {});
-    }
-    
-    // 3.3: Class-based blocking
-    if (deviceClass && deviceClass !== "FF") {
-      console.log(`Applying class-based blocking for class: ${deviceClass}`);
-      await blockUsbClassOnMacOS(deviceClass);
-    }
-    
-    // 3.4: Make macOS "forget" the device using IOKit's registry
-    console.log("Attempting to make macOS forget the device");
-    
-    // Create temporary registry manipulation script
-    // Note: This is a simplified version - a real implementation would use native code
-    const forgetScript = `
-    #!/bin/bash
-    ioreg -p IOUSB -l -w 0 | grep -B 2 -A 5 "idVendor.*0x${vendorId}" | grep -B 2 -A 5 "idProduct.*0x${productId}" | grep -o "@.*" | while read -r dev; do
-      echo "Attempting to disable: $dev"
-      # This would need to be implemented as a native app using IOKit
-    done
-    `;
-    
-    await execPromise(`echo '${forgetScript}' > /tmp/usb_forget.sh && chmod +x /tmp/usb_forget.sh && sudo /tmp/usb_forget.sh`).catch(() => {});
-    
-    // 3.5: Try to create a temporary USB device filter using Device Policy Manager
-    // This is an advanced approach that would normally require developing a system extension
-    console.log("Trying policy-based USB filtering (may require system extensions permission)");
-    
-    // Step 4: Install a persistent block for future connections - requires notarized system extension
-    // We can't actually do this from this script, but we'll tell the user about it
-    console.log("A proper permanent block would require developing a notarized system extension for USB management");
-    
-    // Create helper script for persistent blocking
-    const setupScript = `
-    echo "Creating USB blocking setup for vendor:${vendorId} product:${productId}"
-    echo "This device will be blocked on next connection"
-    `;
-    
-    await execPromise(`echo '${setupScript}' > /usr/local/bin/usb-block-helper.sh && chmod +x /usr/local/bin/usb-block-helper.sh`).catch(() => {});
-    
-    // Launch a monitoring process to handle reconnection attempts
-    exec(`bash -c "while true; do system_profiler SPUSBDataType | grep -B 10 -A 30 \\"Vendor ID: 0x${vendorId}\\" | grep -B 10 -A 20 \\"Product ID: 0x${productId}\\" && sudo diskutil unmountDisk force /dev/disk\\$(diskutil list | grep external | grep -o 'disk[0-9]' | head -1); sleep 2; done" > /dev/null 2>&1 &`);
-    
-    return { success: true, message: `Attempted multiple enhanced methods to block device ${vendorId}:${productId}` };
+    return { success: true, message: `Device ${vendorId}:${productId} blocked successfully` };
   } catch (error) {
-    console.error(`Error in enhanced USB device blocking for ${vendorId}:${productId} on macOS:`, error);
+    console.error(`Error blocking device ${vendorId}:${productId}:`, error);
     return { success: false, message: error.message };
   }
 };
