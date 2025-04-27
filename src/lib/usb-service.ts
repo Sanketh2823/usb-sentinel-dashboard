@@ -1,7 +1,13 @@
 // USB service for handling device data and monitoring
 
-// API endpoint URLs - update these with your actual backend server address
-const API_BASE_URL = "http://localhost:3001";
+// API endpoint URLs - use a function to get the current URL dynamically
+const getApiBaseUrl = () => {
+  // Default to port 3001
+  const defaultPort = 3001;
+  // Check localStorage for a stored port override
+  const storedPort = localStorage.getItem('usbMonitorPort') || defaultPort;
+  return `http://localhost:${storedPort}`;
+};
 
 // Function to convert hexadecimal IDs
 const normalizeHexId = (id) => {
@@ -34,11 +40,45 @@ const logIdProcessing = (type, original, normalized) => {
   console.log(`${type} ID conversion: Original=${original}, Normalized=${normalized}`);
 };
 
-// Real API calls to backend
+// Check server health function
+export const checkServerHealth = async () => {
+  // Try multiple port configurations in case the server moved
+  const portsToTry = [3001, 3002, 3003, 3004, 3005];
+  
+  for (const port of portsToTry) {
+    try {
+      const response = await fetch(`http://localhost:${port}/health`, { 
+        signal: AbortSignal.timeout(1000) // 1 second timeout
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log(`Server found on port ${port}:`, data);
+        // Store the working port in localStorage
+        localStorage.setItem('usbMonitorPort', port.toString());
+        return port;
+      }
+    } catch (error) {
+      console.log(`Server not responding on port ${port}`);
+    }
+  }
+  
+  // If we got here, we couldn't find the server on any port
+  throw new Error('Server not found on any port');
+};
+
+// Real API calls to backend with automatic reconnection logic
 export const fetchUSBDevices = async () => {
   try {
     console.log("Fetching USB devices from API...");
+    
+    // First check if server is available
+    await checkServerHealth();
+    
+    // Now use the updated API base URL
+    const API_BASE_URL = getApiBaseUrl();
     const response = await fetch(`${API_BASE_URL}/api/usb-devices`);
+    
     if (!response.ok) {
       throw new Error(`HTTP error! Status: ${response.status}`);
     }
@@ -84,6 +124,11 @@ export const addDeviceToWhitelist = async (device) => {
     
     console.log("Adding device to whitelist:", normalizedDevice);
     
+    // Check server health first
+    await checkServerHealth();
+    
+    // Use the current API base URL
+    const API_BASE_URL = getApiBaseUrl();
     const response = await fetch(`${API_BASE_URL}/api/whitelist`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -349,13 +394,61 @@ export const checkAdminPrivileges = async () => {
   }
 };
 
-// Real-time monitoring using WebSocket
+// Improved WebSocket monitoring with auto-reconnect
 export const monitorUSBPorts = async (callback) => {
   try {
-    const socket = new WebSocket(`ws://localhost:3001/usb-events`);
+    // First check server health to get the correct port
+    await checkServerHealth();
+    
+    const API_BASE_URL = getApiBaseUrl();
+    const wsBaseUrl = API_BASE_URL.replace('http://', 'ws://');
+    const socket = new WebSocket(`${wsBaseUrl}/usb-events`);
+    
+    let reconnectAttempts = 0;
+    let reconnectInterval = null;
+    
+    const reconnect = async () => {
+      try {
+        // Only retry up to 5 times
+        if (reconnectAttempts >= 5) {
+          console.error("Failed to reconnect after 5 attempts");
+          return;
+        }
+        
+        reconnectAttempts++;
+        console.log(`Attempting to reconnect WebSocket (attempt ${reconnectAttempts})...`);
+        
+        // Try to find the server again
+        await checkServerHealth();
+        
+        // Get the updated base URL
+        const updatedWsBaseUrl = getApiBaseUrl().replace('http://', 'ws://');
+        const newSocket = new WebSocket(`${updatedWsBaseUrl}/usb-events`);
+        
+        // Set up the event handlers for the new socket
+        newSocket.onopen = () => {
+          console.log("WebSocket reconnected successfully");
+          reconnectAttempts = 0; // Reset the counter on successful connection
+          if (reconnectInterval) {
+            clearInterval(reconnectInterval);
+            reconnectInterval = null;
+          }
+        };
+        
+        newSocket.onmessage = socket.onmessage;
+        newSocket.onerror = socket.onerror;
+        newSocket.onclose = socket.onclose;
+        
+        // Replace the old socket with the new one
+        socket = newSocket;
+      } catch (error) {
+        console.error("Error reconnecting WebSocket:", error);
+      }
+    };
     
     socket.onopen = () => {
       console.log("WebSocket connection established for USB monitoring");
+      reconnectAttempts = 0; // Reset on successful connection
     };
     
     socket.onmessage = (event) => {
@@ -373,35 +466,7 @@ export const monitorUSBPorts = async (callback) => {
           console.log(`WebSocket blocked attempt original vendorId: ${data.newBlockedAttempt.vendorId}, productId: ${data.newBlockedAttempt.productId}`);
         }
         
-        // Normalize IDs in received data if needed
-        if (data.newLog && data.newLog.vendorId) {
-          // Keep original value if it's already in correct format
-          data.newLog.vendorId = data.newLog.vendorId;
-        }
-        if (data.newLog && data.newLog.productId) {
-          // Keep original value if it's already in correct format
-          data.newLog.productId = data.newLog.productId;
-        }
-        
-        if (data.newBlockedAttempt && data.newBlockedAttempt.vendorId) {
-          // Keep original value if it's already in correct format
-          data.newBlockedAttempt.vendorId = data.newBlockedAttempt.vendorId;
-        }
-        if (data.newBlockedAttempt && data.newBlockedAttempt.productId) {
-          // Keep original value if it's already in correct format
-          data.newBlockedAttempt.productId = data.newBlockedAttempt.productId;
-        }
-        
-        // Fix whitelist update data if present
-        if (data.whitelistUpdate) {
-          console.log("Original whitelist update data:", JSON.stringify(data.whitelistUpdate));
-          
-          // Keep original values as they should already be correct from the server
-          data.whitelistUpdate = data.whitelistUpdate;
-          
-          console.log("Normalized whitelist update data:", JSON.stringify(data.whitelistUpdate));
-        }
-        
+        // Call the callback with the data
         callback(data);
       } catch (error) {
         console.error("Error handling WebSocket message:", error);
@@ -410,15 +475,24 @@ export const monitorUSBPorts = async (callback) => {
     
     socket.onerror = (error) => {
       console.error("WebSocket error:", error);
+      // Don't try to reconnect here, wait for onclose
     };
     
     socket.onclose = (event) => {
       console.log(`WebSocket connection closed: ${event.reason}`);
+      
+      // Set up reconnection attempt
+      if (!reconnectInterval) {
+        reconnectInterval = setInterval(reconnect, 2000); // Try every 2 seconds
+      }
     };
     
     return {
       unsubscribe: () => {
         console.log("Closing WebSocket connection");
+        if (reconnectInterval) {
+          clearInterval(reconnectInterval);
+        }
         socket.close();
       }
     };

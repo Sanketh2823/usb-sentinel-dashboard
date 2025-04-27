@@ -1,9 +1,11 @@
+
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const usbDetect = require("usb-detection");
 const os = require('os');
 const { execSync } = require('child_process');
+const fs = require('fs');
 
 // Import modules
 const { initializeDataFiles } = require('./src/config');
@@ -30,6 +32,38 @@ app.use(express.json());
 
 // Initialize data files
 initializeDataFiles();
+
+// CRITICAL: Cleanup function to remove any persistent blocking services
+const cleanupBlockingServices = () => {
+  if (os.platform() === 'darwin') {
+    try {
+      console.log("Cleaning up any persistent USB blocking services...");
+      
+      // Remove the LaunchDaemon files that cause issues
+      execSync(`sudo rm -f /Library/LaunchDaemons/com.usbmonitor.blockusb.plist 2>/dev/null || true`);
+      execSync(`sudo rm -f /Library/LaunchDaemons/com.usbmonitor.enhanced.plist 2>/dev/null || true`);
+      
+      // Unload the services if they exist
+      execSync(`sudo launchctl unload /Library/LaunchDaemons/com.usbmonitor.blockusb.plist 2>/dev/null || true`);
+      execSync(`sudo launchctl unload /Library/LaunchDaemons/com.usbmonitor.enhanced.plist 2>/dev/null || true`);
+      
+      // Also check user LaunchAgents
+      execSync(`rm -f ~/Library/LaunchAgents/com.usbmonitor.* 2>/dev/null || true`);
+      
+      // Remove any temporary block scripts
+      execSync(`sudo rm -f /tmp/usb_block_*.sh 2>/dev/null || true`);
+      execSync(`sudo rm -f /tmp/usb_forget.sh 2>/dev/null || true`);
+      execSync(`sudo rm -f /tmp/usb_block.sh 2>/dev/null || true`);
+      
+      console.log("Cleanup completed successfully");
+    } catch (err) {
+      console.log("Warning during cleanup:", err.message);
+    }
+  }
+};
+
+// Run cleanup immediately at startup
+cleanupBlockingServices();
 
 // Set up WebSocket server with automatic reconnection handling
 const wss = setupWebSocket(server);
@@ -124,6 +158,11 @@ const startServer = () => {
         }
       });
     }, 15000); // Every 15 seconds
+    
+    // Run cleanup periodically to ensure blocking services are removed
+    setInterval(() => {
+      cleanupBlockingServices();
+    }, 300000); // Every 5 minutes
   });
   
   server.on('error', (e) => {
@@ -145,6 +184,19 @@ const startServer = () => {
     }
   });
 };
+
+// Also clean up when the server is shutting down
+process.on('SIGINT', () => {
+  console.log('Server shutting down, cleaning up...');
+  cleanupBlockingServices();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('Server terminating, cleaning up...');
+  cleanupBlockingServices();
+  process.exit(0);
+});
 
 // Set up process error handling for stability
 process.on('uncaughtException', (error) => {

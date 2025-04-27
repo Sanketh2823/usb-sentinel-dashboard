@@ -1,4 +1,3 @@
-
 /**
  * Helper to check if a USB device is whitelisted.
  * @param {object} device
@@ -84,6 +83,7 @@ function formatDeviceIds(device) {
 async function unblockWhitelistedDevice(device) {
   const { execSync } = require('child_process');
   const os = require('os');
+  const fs = require('fs');
   const platform = os.platform();
   
   // Format device IDs to ensure consistency
@@ -98,7 +98,26 @@ async function unblockWhitelistedDevice(device) {
       // For macOS, implement more aggressive unblocking procedures
       console.log("Running enhanced macOS unblock procedures");
       
-      // 1. IMMEDIATE REMOVAL OF ANY BLOCKING FILES
+      // 1. CRUCIAL: Remove LaunchDaemon files that are causing persistent blocks
+      try {
+        console.log("Removing persistent LaunchDaemon files...");
+        // Remove the specific LaunchDaemon files that are causing issues
+        execSync(`sudo rm -f /Library/LaunchDaemons/com.usbmonitor.blockusb.plist 2>/dev/null || true`);
+        execSync(`sudo rm -f /Library/LaunchDaemons/com.usbmonitor.enhanced.plist 2>/dev/null || true`);
+        
+        // Also check and remove from user-specific LaunchAgents if present
+        execSync(`rm -f ~/Library/LaunchAgents/com.usbmonitor.* 2>/dev/null || true`);
+        
+        // Unload the launchd services if they're loaded
+        execSync(`sudo launchctl unload /Library/LaunchDaemons/com.usbmonitor.blockusb.plist 2>/dev/null || true`);
+        execSync(`sudo launchctl unload /Library/LaunchDaemons/com.usbmonitor.enhanced.plist 2>/dev/null || true`);
+        
+        console.log("Persistent LaunchDaemon files removed");
+      } catch (err) {
+        console.log("Warning during removal of LaunchDaemons:", err.message);
+      }
+      
+      // 2. IMMEDIATE REMOVAL OF ANY BLOCKING FILES
       try {
         console.log("Removing ALL USB block rules for this device...");
         // Clear any rules specifically for this device
@@ -113,40 +132,31 @@ async function unblockWhitelistedDevice(device) {
         console.log("Removing block rules warning:", err.message);
       }
       
-      // 2. FORCE IMMEDIATE RESET OF ALL USB SUBSYSTEMS WITH PRIORITY ON THIS DEVICE
+      // 3. FORCE IMMEDIATE RESET OF ALL USB SUBSYSTEMS WITH PRIORITY ON THIS DEVICE
       try {
         console.log("Performing complete USB subsystem reset...");
         
         // First try to enable the device directly (if visible)
         execSync(`ioreg -p IOUSB -l | grep -B 10 -A 30 "idVendor.*0x${vendorId}" | grep -B 10 -A 20 "idProduct.*0x${productId}" || true`);
         
-        // Then unload ALL storage related drivers to clear any blocks
-        execSync(`sudo kextunload -b com.apple.driver.usb.massstorage 2>/dev/null || true`);
-        execSync(`sudo kextunload -b com.apple.iokit.IOUSBMassStorageClass 2>/dev/null || true`);
-        
-        // Force unmount any external drives that might be in a locked state
-        execSync(`diskutil list | grep external | awk '{print $1}' | xargs -I{} sudo diskutil unmountDisk force {} 2>/dev/null || true`);
-        
-        // Then reload the drivers
+        // Ensure USB storage drivers are loaded
         execSync(`sudo kextload -b com.apple.iokit.IOUSBMassStorageClass 2>/dev/null || true`);
         execSync(`sudo kextload -b com.apple.driver.usb.massstorage 2>/dev/null || true`);
         
-        // Force remount of ALL external drives
-        execSync(`diskutil list | grep external | awk '{print $1}' | xargs -I{} diskutil mountDisk {} 2>/dev/null || true`);
+        // Kill any processes that might have locks on USB devices
+        execSync(`sudo killall usbd 2>/dev/null || true`);
+        execSync(`sudo killall -KILL UserEventAgent 2>/dev/null || true`); // macOS process that manages device events
         
         // Full USB reset with complete unload/reload - CRITICAL for macOS
         execSync(`sudo kextunload -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || true`);
         execSync(`sudo kextload -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || true`);
-        
-        // Kill and restart USB-related system processes to ensure changes apply
-        execSync(`killall usbd 2>/dev/null || true`);
         
         console.log("USB subsystem completely reset");
       } catch (resetErr) {
         console.log("USB reset applied with warnings:", resetErr.message);
       }
       
-      // 3. Try additional disk mounting strategies
+      // 4. Try additional disk mounting strategies
       try {
         // Look for all available external disks
         console.log("Performing aggressive disk recovery for external storage...");
@@ -169,9 +179,19 @@ async function unblockWhitelistedDevice(device) {
               }
             }
           }
+        } else {
+          console.log("No external disks found for remounting");
         }
       } catch (diskErr) {
         console.log("Disk recovery completed with warnings:", diskErr.message);
+      }
+      
+      // 5. Verify if the device is now visible to the system
+      try {
+        const checkOutput = execSync(`system_profiler SPUSBDataType | grep -A 20 -B 5 "${vendorId}" || echo "Device not found"`, { encoding: 'utf8' });
+        console.log("Device visibility check result:", checkOutput);
+      } catch (checkErr) {
+        console.log("Device check error:", checkErr.message);
       }
       
       console.log("All unblocking procedures completed - device should be accessible now");

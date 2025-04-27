@@ -173,9 +173,21 @@ router.post('/whitelist', async (req, res) => {
              d.productId.toLowerCase() === formattedDevice.productId.toLowerCase()
     );
     
+    let whitelistEntry;
+    let unblockResult = false;
+    
+    // Even if it's already whitelisted, we want to attempt unblocking
+    try {
+      console.log("CRITICAL: Executing immediate unblock attempt for device");
+      unblockResult = await unblockWhitelistedDevice(formattedDevice);
+      console.log(`Device unblock result: ${unblockResult ? "Success" : "Partial success, may need reconnection"}`);
+    } catch (unblockError) {
+      console.error("Error during device unblocking:", unblockError);
+    }
+    
     if (!isAlreadyWhitelisted) {
       // Create a complete device record with proper status
-      const whitelistEntry = {
+      whitelistEntry = {
         ...formattedDevice,
         dateAdded: new Date().toISOString(),
         id: Date.now(),
@@ -185,9 +197,6 @@ router.post('/whitelist', async (req, res) => {
       // Add device to whitelist
       whitelistedDevices.push(whitelistEntry);
       writeDataFile(whitelistPath, whitelistedDevices);
-      
-      // Try to unblock the device since it's now whitelisted
-      const unblockResult = await unblockWhitelistedDevice(formattedDevice);
       
       // Log the action
       const logs = readDataFile(logsPath);
@@ -202,7 +211,7 @@ router.post('/whitelist', async (req, res) => {
       logs.unshift(logEntry);
       writeDataFile(logsPath, logs);
       
-      // Broadcast update
+      // Broadcast update IMMEDIATELY
       broadcastUpdate({
         whitelistUpdate: whitelistedDevices,
         newLog: logEntry
@@ -215,8 +224,36 @@ router.post('/whitelist', async (req, res) => {
           'Device added to whitelist - please disconnect and reconnect to complete' 
       });
     } else {
-      // If already whitelisted, still try to unblock it (user may be trying to fix a blocked device)
-      const unblockResult = await unblockWhitelistedDevice(formattedDevice);
+      // Find the existing entry to update its status
+      const existingDeviceIndex = whitelistedDevices.findIndex(
+        d => d.vendorId.toLowerCase() === formattedDevice.vendorId.toLowerCase() && 
+             d.productId.toLowerCase() === formattedDevice.productId.toLowerCase()
+      );
+      
+      if (existingDeviceIndex >= 0) {
+        // Update the status to "allowed"
+        whitelistedDevices[existingDeviceIndex].status = "allowed";
+        writeDataFile(whitelistPath, whitelistedDevices);
+      }
+      
+      // Log the action for already whitelisted device
+      const logs = readDataFile(logsPath);
+      const logEntry = {
+        action: 'Update Whitelisted Device',
+        device: `${device.name || formattedDevice.manufacturer || 'Unknown device'} (${formattedDevice.vendorId}:${formattedDevice.productId})`,
+        date: new Date().toISOString(),
+        status: unblockResult ? 'success' : 'partial',
+        message: unblockResult ? 'Device unblock successful' : 'Device may need reconnection',
+        id: Date.now()
+      };
+      logs.unshift(logEntry);
+      writeDataFile(logsPath, logs);
+      
+      // Broadcast update IMMEDIATELY
+      broadcastUpdate({
+        whitelistUpdate: whitelistedDevices,
+        newLog: logEntry
+      });
       
       res.json({ 
         success: true, 
