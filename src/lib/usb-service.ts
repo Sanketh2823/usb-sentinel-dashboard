@@ -1,3 +1,5 @@
+import React from 'react';
+
 // USB service for handling device data and monitoring
 
 // API endpoint URLs - use a function to get the current URL dynamically
@@ -256,14 +258,15 @@ export const forceBlockUSBDevice = async (deviceId) => {
     const platform = detectClientOS();
     console.log(`Attempting to force block device ${vendorId}:${productId} on platform: ${platform}`);
     
+    // Use getApiBaseUrl() to dynamically get the current API base URL
+    const API_BASE_URL = getApiBaseUrl();
+    
     // Make the block request with vendorId and productId
     const response = await fetch(`${API_BASE_URL}/api/force-block-device`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ vendorId, productId })
     });
-    
-    console.log("Force block response status:", response.status);
     
     if (!response.ok) {
       const errorData = await response.json();
@@ -301,6 +304,9 @@ export const ejectUSBDevice = async (deviceId) => {
     const platform = detectClientOS();
     console.log(`Attempting to eject device ${vendorId}:${productId} on platform: ${platform}`);
     
+    // Use getApiBaseUrl() to dynamically get the current API base URL
+    const API_BASE_URL = getApiBaseUrl();
+    
     // Make the eject request with vendorId and productId
     const response = await fetch(`${API_BASE_URL}/api/eject-device`, {
       method: 'POST',
@@ -331,6 +337,9 @@ export const refreshUSBDevices = async () => {
     // Get the operating system platform info from the client
     const platform = detectClientOS();
     console.log(`Refreshing USB devices on platform: ${platform}`);
+    
+    // Use getApiBaseUrl() to dynamically get the current API base URL
+    const API_BASE_URL = getApiBaseUrl();
     
     // Make the refresh request with platform info
     const response = await fetch(`${API_BASE_URL}/api/refresh-devices`, {
@@ -369,6 +378,8 @@ const detectClientOS = () => {
 // New function to check system permissions
 export const checkSystemPermissions = async () => {
   try {
+    const API_BASE_URL = getApiBaseUrl();
+    
     const response = await fetch(`${API_BASE_URL}/api/system-permissions`);
     
     if (!response.ok) {
@@ -387,6 +398,8 @@ export const checkSystemPermissions = async () => {
 // New function to check admin privileges
 export const checkAdminPrivileges = async () => {
   try {
+    const API_BASE_URL = getApiBaseUrl();
+    
     const response = await fetch(`${API_BASE_URL}/api/admin-check`);
     
     if (!response.ok) {
