@@ -170,7 +170,10 @@ export const removeDeviceFromWhitelist = async (deviceId) => {
 
 export const fetchAllowedDeviceClasses = async () => {
   try {
+    // Use getApiBaseUrl() to dynamically get the current API base URL
+    const API_BASE_URL = getApiBaseUrl();
     const response = await fetch(`${API_BASE_URL}/api/allowed-classes`);
+    
     if (!response.ok) {
       throw new Error(`HTTP error! Status: ${response.status}`);
     }
@@ -185,6 +188,8 @@ export const fetchAllowedDeviceClasses = async () => {
 
 export const updateAllowedDeviceClasses = async (allowedClasses) => {
   try {
+    // Use getApiBaseUrl() to dynamically get the current API base URL
+    const API_BASE_URL = getApiBaseUrl();
     const response = await fetch(`${API_BASE_URL}/api/allowed-classes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -208,6 +213,8 @@ export const blockUSBDeviceClass = async (classId) => {
   try {
     console.log(`Attempting to block USB device class: ${classId}`);
     
+    // Use getApiBaseUrl() to dynamically get the current API base URL
+    const API_BASE_URL = getApiBaseUrl();
     const response = await fetch(`${API_BASE_URL}/api/block-usb-class`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
