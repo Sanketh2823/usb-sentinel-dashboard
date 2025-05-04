@@ -9,7 +9,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { fetchUSBDevices, monitorUSBPorts, addDeviceToWhitelist, removeDeviceFromWhitelist, fetchAllowedDeviceClasses, updateAllowedDeviceClasses, forceBlockUSBDevice, blockUSBDeviceClass } from "@/lib/usb-service";
+import { 
+  fetchUSBDevices, 
+  monitorUSBPorts, 
+  addDeviceToWhitelist, 
+  removeDeviceFromWhitelist, 
+  fetchAllowedDeviceClasses, 
+  updateAllowedDeviceClasses, 
+  forceBlockUSBDevice, 
+  blockUSBDeviceClass 
+} from "@/lib/usb-service";
 
 const Dashboard = () => {
   const { toast } = useToast();

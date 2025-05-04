@@ -55,4 +55,108 @@ export const addDeviceToWhitelist = async (device: any) => {
   }
 };
 
-// ... Implement other device operations (removeDeviceFromWhitelist, blockUSBDeviceClass, etc.)
+export const removeDeviceFromWhitelist = async (deviceId: number) => {
+  try {
+    await checkServerHealth();
+    const API_BASE_URL = getApiBaseUrl();
+    
+    const response = await fetch(`${API_BASE_URL}/api/whitelist/${deviceId}`, {
+      method: 'DELETE',
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error("Error removing device from whitelist:", error);
+    throw new Error("Failed to remove device from whitelist");
+  }
+};
+
+export const fetchAllowedDeviceClasses = async () => {
+  try {
+    await checkServerHealth();
+    const API_BASE_URL = getApiBaseUrl();
+    
+    const response = await fetch(`${API_BASE_URL}/api/allowed-classes`);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error("Error fetching allowed device classes:", error);
+    throw new Error("Failed to fetch allowed device classes");
+  }
+};
+
+export const updateAllowedDeviceClasses = async (allowedClasses: any[]) => {
+  try {
+    await checkServerHealth();
+    const API_BASE_URL = getApiBaseUrl();
+    
+    const response = await fetch(`${API_BASE_URL}/api/allowed-classes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(allowedClasses)
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error("Error updating allowed device classes:", error);
+    throw new Error("Failed to update allowed device classes");
+  }
+};
+
+export const forceBlockUSBDevice = async (vendorId: string, productId: string) => {
+  try {
+    await checkServerHealth();
+    const API_BASE_URL = getApiBaseUrl();
+    
+    const response = await fetch(`${API_BASE_URL}/api/force-block-device`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vendorId, productId })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error("Error force blocking USB device:", error);
+    throw new Error("Failed to force block USB device");
+  }
+};
+
+export const blockUSBDeviceClass = async (classId: string) => {
+  try {
+    await checkServerHealth();
+    const API_BASE_URL = getApiBaseUrl();
+    
+    const response = await fetch(`${API_BASE_URL}/api/block-usb-class`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ classId })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error("Error blocking USB device class:", error);
+    throw new Error("Failed to block USB device class");
+  }
+};
+
+// Additional device operations can be implemented here
