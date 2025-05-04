@@ -35,9 +35,34 @@ export const addDeviceToWhitelist = async (device: any) => {
       vendorId: normalizedVendorId
     };
     
+    console.log("Adding to whitelist with normalized IDs:", normalizedDevice);
+    
     await checkServerHealth();
     const API_BASE_URL = getApiBaseUrl();
     
+    // First, try explicitly triggering the unblock operation
+    try {
+      console.log("Pre-emptively triggering unblock operation");
+      const unblockResponse = await fetch(`${API_BASE_URL}/api/unblock-device`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vendorId: normalizedVendorId,
+          productId: normalizedProductId
+        })
+      });
+      
+      if (unblockResponse.ok) {
+        console.log("Pre-emptive unblock successful");
+      } else {
+        console.warn("Pre-emptive unblock returned non-OK status:", unblockResponse.status);
+      }
+    } catch (unblockError) {
+      console.warn("Pre-emptive unblock attempt failed:", unblockError);
+      // Continue with whitelist addition even if unblock fails
+    }
+    
+    // Now add to whitelist
     const response = await fetch(`${API_BASE_URL}/api/whitelist`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -48,7 +73,10 @@ export const addDeviceToWhitelist = async (device: any) => {
       throw new Error(`HTTP error! Status: ${response.status}`);
     }
     
-    return await response.json();
+    const result = await response.json();
+    console.log("Whitelist addition result:", result);
+    
+    return result;
   } catch (error) {
     console.error("Error adding device to whitelist:", error);
     throw new Error("Failed to add device to whitelist");
@@ -120,10 +148,18 @@ export const forceBlockUSBDevice = async (vendorId: string, productId: string) =
     await checkServerHealth();
     const API_BASE_URL = getApiBaseUrl();
     
+    const normalizedVendorId = normalizeHexId(vendorId);
+    const normalizedProductId = normalizeHexId(productId);
+    
+    console.log(`Force blocking device: ${normalizedVendorId}:${normalizedProductId}`);
+    
     const response = await fetch(`${API_BASE_URL}/api/force-block-device`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ vendorId, productId })
+      body: JSON.stringify({ 
+        vendorId: normalizedVendorId, 
+        productId: normalizedProductId 
+      })
     });
     
     if (!response.ok) {
@@ -156,6 +192,37 @@ export const blockUSBDeviceClass = async (classId: string) => {
   } catch (error) {
     console.error("Error blocking USB device class:", error);
     throw new Error("Failed to block USB device class");
+  }
+};
+
+// New function to explicitly unblock a USB device
+export const unblockUSBDevice = async (vendorId: string, productId: string) => {
+  try {
+    await checkServerHealth();
+    const API_BASE_URL = getApiBaseUrl();
+    
+    const normalizedVendorId = normalizeHexId(vendorId);
+    const normalizedProductId = normalizeHexId(productId);
+    
+    console.log(`Explicitly unblocking device: ${normalizedVendorId}:${normalizedProductId}`);
+    
+    const response = await fetch(`${API_BASE_URL}/api/unblock-device`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        vendorId: normalizedVendorId, 
+        productId: normalizedProductId 
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error("Error unblocking USB device:", error);
+    throw new Error("Failed to unblock USB device");
   }
 };
 

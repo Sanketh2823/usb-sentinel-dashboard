@@ -1,3 +1,4 @@
+
 /**
  * Helper to check if a USB device is whitelisted.
  * @param {object} device
@@ -117,16 +118,19 @@ async function unblockWhitelistedDevice(device) {
         console.log("Warning during removal of LaunchDaemons:", err.message);
       }
       
-      // 2. IMMEDIATE REMOVAL OF ANY BLOCKING FILES
+      // 2. IMMEDIATE REMOVAL OF ANY BLOCKING FILES - expanded with more specific searches
       try {
         console.log("Removing ALL USB block rules for this device...");
         // Clear any rules specifically for this device
         execSync(`sudo rm -f /tmp/usb_block_${vendorId}_${productId}.sh 2>/dev/null || true`);
+        execSync(`sudo rm -f /tmp/usb_block_*${vendorId}*.sh 2>/dev/null || true`); // Try partial matches
+        execSync(`sudo rm -f /tmp/usb_block_*${productId}*.sh 2>/dev/null || true`); // Try partial matches
         execSync(`sudo rm -f /tmp/usb_forget.sh 2>/dev/null || true`);
         execSync(`sudo rm -f /tmp/usb_block.sh 2>/dev/null || true`);
         
-        // Remove from hosts file if present
+        // Remove from hosts file if present (expanded patterns)
         execSync(`sudo sed -i '' '/${vendorId}-${productId}.local/d' /etc/hosts 2>/dev/null || true`);
+        execSync(`sudo sed -i '' '/${vendorId}.local/d' /etc/hosts 2>/dev/null || true`);
         execSync(`sudo sed -i '' '/USB BLOCK/d' /etc/hosts 2>/dev/null || true`);
       } catch (err) {
         console.log("Removing block rules warning:", err.message);
@@ -137,7 +141,9 @@ async function unblockWhitelistedDevice(device) {
         console.log("Performing complete USB subsystem reset...");
         
         // First try to enable the device directly (if visible)
-        execSync(`ioreg -p IOUSB -l | grep -B 10 -A 30 "idVendor.*0x${vendorId}" | grep -B 10 -A 20 "idProduct.*0x${productId}" || true`);
+        const deviceCheckCmd = `ioreg -p IOUSB -l | grep -B 10 -A 30 "idVendor.*0x${vendorId}" | grep -B 10 -A 20 "idProduct.*0x${productId}" || echo "Device not found"`;
+        const deviceInfo = execSync(deviceCheckCmd, { encoding: 'utf8' });
+        console.log("Device check result:", deviceInfo.includes("Device not found") ? "Not found" : "Found in system");
         
         // Ensure USB storage drivers are loaded
         execSync(`sudo kextload -b com.apple.iokit.IOUSBMassStorageClass 2>/dev/null || true`);
@@ -147,11 +153,19 @@ async function unblockWhitelistedDevice(device) {
         execSync(`sudo killall usbd 2>/dev/null || true`);
         execSync(`sudo killall -KILL UserEventAgent 2>/dev/null || true`); // macOS process that manages device events
         
-        // Full USB reset with complete unload/reload - CRITICAL for macOS
-        execSync(`sudo kextunload -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || true`);
-        execSync(`sudo kextload -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || true`);
+        // Try more targeted approach first - just restart the USB Host controller
+        execSync(`sudo kextunload -b com.apple.driver.usb.AppleUSBHostMergeProperties 2>/dev/null || true`);
+        execSync(`sudo kextload -b com.apple.driver.usb.AppleUSBHostMergeProperties 2>/dev/null || true`);
         
-        console.log("USB subsystem completely reset");
+        // If we need a more dramatic reset (only if device isn't visible)
+        if (deviceInfo.includes("Device not found")) {
+          console.log("Device not found in system, attempting full USB stack reset...");
+          // Full USB reset with complete unload/reload - CRITICAL for macOS
+          execSync(`sudo kextunload -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || true`);
+          execSync(`sudo kextload -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || true`);
+        }
+        
+        console.log("USB subsystem reset completed");
       } catch (resetErr) {
         console.log("USB reset applied with warnings:", resetErr.message);
       }
@@ -189,7 +203,33 @@ async function unblockWhitelistedDevice(device) {
       // 5. Verify if the device is now visible to the system
       try {
         const checkOutput = execSync(`system_profiler SPUSBDataType | grep -A 20 -B 5 "${vendorId}" || echo "Device not found"`, { encoding: 'utf8' });
-        console.log("Device visibility check result:", checkOutput);
+        console.log("Device visibility check result:", checkOutput.includes("Device not found") ? "Not found" : "Found");
+        
+        // If device is still not visible, try one more trick - try using a waiting loop
+        if (checkOutput.includes("Device not found")) {
+          console.log("Device not visible yet, will attempt periodic rescans...");
+          
+          // Create a script to periodically check and try to mount the device
+          const rescriptContent = `
+#!/bin/bash
+echo "Starting USB rescan script for device ${vendorId}:${productId}"
+for i in {1..5}; do
+  echo "Attempt $i: Rescanning USB devices..."
+  kextunload -b com.apple.driver.usb.AppleUSBHostMergeProperties 2>/dev/null || true
+  sleep 1
+  kextload -b com.apple.driver.usb.AppleUSBHostMergeProperties 2>/dev/null || true
+  sleep 2
+  diskutil list | grep external
+  sleep 3
+done
+`;
+          const scriptPath = `/tmp/usb_rescan_${vendorId}_${productId}.sh`;
+          fs.writeFileSync(scriptPath, rescriptContent);
+          fs.chmodSync(scriptPath, '755');
+          
+          // Execute the script in the background
+          execSync(`nohup /tmp/usb_rescan_${vendorId}_${productId}.sh > /tmp/usb_rescan_${vendorId}_${productId}.log 2>&1 &`);
+        }
       } catch (checkErr) {
         console.log("Device check error:", checkErr.message);
       }

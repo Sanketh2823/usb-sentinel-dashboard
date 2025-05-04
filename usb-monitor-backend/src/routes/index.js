@@ -1,3 +1,4 @@
+
 const express = require('express');
 const os = require('os');
 const { 
@@ -19,6 +20,7 @@ const {
   refreshUSBDevices
 } = require('../controllers/usb');
 const { blockUsbClassOnMacOS } = require('../controllers/macos');
+const { unblockWhitelistedDevice } = require('../helpers/whitelist');
 
 const router = express.Router();
 
@@ -153,6 +155,52 @@ router.post('/allowed-classes', (req, res) => {
   }
 });
 
+// NEW ENDPOINT: Explicit unblock device endpoint
+router.post('/unblock-device', async (req, res) => {
+  try {
+    const { vendorId, productId } = req.body;
+    if (!vendorId || !productId) {
+      return res.status(400).json({ error: 'Vendor ID and Product ID are required' });
+    }
+    
+    console.log(`Explicit unblock request for device: ${vendorId}:${productId}`);
+    
+    // Format device for consistency
+    const { formatDeviceIds } = require('../helpers/whitelist');
+    const device = formatDeviceIds({ vendorId, productId });
+    
+    // Use the unblock function from whitelist helpers
+    const unblockResult = await unblockWhitelistedDevice(device);
+    
+    // Log the action
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      action: 'Unblock Device',
+      device: `${vendorId}:${productId}`,
+      status: unblockResult ? 'success' : 'failed',
+      date: new Date().toISOString(),
+      id: Date.now()
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    
+    // Broadcast the update
+    broadcastUpdate({
+      newLog: logEntry
+    });
+    
+    res.json({ 
+      success: unblockResult, 
+      message: unblockResult ? 
+        'Device unblocked successfully' : 
+        'Device unblock attempted but may require reconnection'
+    });
+  } catch (error) {
+    console.error('Error unblocking device:', error);
+    res.status(500).json({ error: 'Failed to unblock device', message: error.message });
+  }
+});
+
 // Add device to whitelist endpoint
 router.post('/whitelist', async (req, res) => {
   try {
@@ -176,11 +224,24 @@ router.post('/whitelist', async (req, res) => {
     let whitelistEntry;
     let unblockResult = false;
     
-    // Even if it's already whitelisted, we want to attempt unblocking
+    // IMPORTANT: Always attempt unblocking aggressively, whether the device is new or already whitelisted
     try {
       console.log("CRITICAL: Executing immediate unblock attempt for device");
       unblockResult = await unblockWhitelistedDevice(formattedDevice);
       console.log(`Device unblock result: ${unblockResult ? "Success" : "Partial success, may need reconnection"}`);
+      
+      // If first unblock fails, try again with a slight delay - sometimes helps on macOS
+      if (!unblockResult) {
+        console.log("First unblock attempt didn't fully succeed, trying again after delay...");
+        setTimeout(async () => {
+          try {
+            await unblockWhitelistedDevice(formattedDevice);
+            console.log("Second unblock attempt completed");
+          } catch (error) {
+            console.error("Error in second unblock attempt:", error);
+          }
+        }, 500);
+      }
     } catch (unblockError) {
       console.error("Error during device unblocking:", unblockError);
     }
