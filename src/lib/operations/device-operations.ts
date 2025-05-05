@@ -40,9 +40,9 @@ export const addDeviceToWhitelist = async (device: any) => {
     await checkServerHealth();
     const API_BASE_URL = getApiBaseUrl();
     
-    // First, try explicitly triggering the unblock operation
+    // First, EXPLICITLY unblock the device (crucial step)
+    console.log("CRITICAL: Explicitly triggering unblock operation FIRST");
     try {
-      console.log("Pre-emptively triggering unblock operation");
       const unblockResponse = await fetch(`${API_BASE_URL}/api/unblock-device`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -52,10 +52,21 @@ export const addDeviceToWhitelist = async (device: any) => {
         })
       });
       
-      if (unblockResponse.ok) {
-        console.log("Pre-emptive unblock successful");
+      if (!unblockResponse.ok) {
+        console.warn("Unblock operation returned non-OK status:", unblockResponse.status);
+        // Try a second time with a slight delay - this often helps with macOS
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const secondUnblockResponse = await fetch(`${API_BASE_URL}/api/unblock-device`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            vendorId: normalizedVendorId,
+            productId: normalizedProductId
+          })
+        });
+        console.log("Second unblock attempt status:", secondUnblockResponse.status);
       } else {
-        console.warn("Pre-emptive unblock returned non-OK status:", unblockResponse.status);
+        console.log("Pre-emptive unblock successful");
       }
     } catch (unblockError) {
       console.warn("Pre-emptive unblock attempt failed:", unblockError);
@@ -75,6 +86,30 @@ export const addDeviceToWhitelist = async (device: any) => {
     
     const result = await response.json();
     console.log("Whitelist addition result:", result);
+    
+    // CRITICAL: Try unblocking ONE MORE TIME after adding to whitelist
+    // This ensures permanent block files are removed
+    try {
+      console.log("Performing final unblock attempt after whitelist addition");
+      await fetch(`${API_BASE_URL}/api/unblock-device`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vendorId: normalizedVendorId,
+          productId: normalizedProductId
+        })
+      });
+      
+      // Also directly attempt to delete the LaunchDaemon plist file
+      // This mimics the manual fix you've been doing
+      const cleanupResponse = await fetch(`${API_BASE_URL}/api/cleanup-blocking-files`, {
+        method: 'POST'
+      }).catch(err => console.warn("Cleanup request failed:", err));
+      
+      console.log("Final cleanup response:", cleanupResponse);
+    } catch (finalUnblockError) {
+      console.warn("Final unblock attempt failed:", finalUnblockError);
+    }
     
     return result;
   } catch (error) {
@@ -195,7 +230,7 @@ export const blockUSBDeviceClass = async (classId: string) => {
   }
 };
 
-// New function to explicitly unblock a USB device
+// Enhanced function to explicitly unblock a USB device with retries
 export const unblockUSBDevice = async (vendorId: string, productId: string) => {
   try {
     await checkServerHealth();
@@ -206,7 +241,8 @@ export const unblockUSBDevice = async (vendorId: string, productId: string) => {
     
     console.log(`Explicitly unblocking device: ${normalizedVendorId}:${normalizedProductId}`);
     
-    const response = await fetch(`${API_BASE_URL}/api/unblock-device`, {
+    // First unblock attempt
+    let response = await fetch(`${API_BASE_URL}/api/unblock-device`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -216,7 +252,38 @@ export const unblockUSBDevice = async (vendorId: string, productId: string) => {
     });
     
     if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
+      console.warn(`First unblock attempt failed with status: ${response.status}`);
+      
+      // Wait a moment and try again
+      await new Promise(resolve => setTimeout(resolve, 800));
+      
+      // Second unblock attempt
+      response = await fetch(`${API_BASE_URL}/api/unblock-device`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          vendorId: normalizedVendorId, 
+          productId: normalizedProductId 
+        })
+      });
+      
+      if (!response.ok) {
+        console.warn(`Second unblock attempt failed with status: ${response.status}`);
+      } else {
+        console.log("Second unblock attempt succeeded");
+      }
+    } else {
+      console.log("First unblock attempt succeeded");
+    }
+    
+    // CRITICAL: Always make a cleanup request to explicitly remove blocking files
+    try {
+      const cleanupResponse = await fetch(`${API_BASE_URL}/api/cleanup-blocking-files`, {
+        method: 'POST'
+      });
+      console.log("Cleanup request status:", cleanupResponse.status);
+    } catch (cleanupError) {
+      console.warn("Cleanup request failed:", cleanupError);
     }
     
     return await response.json();
@@ -226,4 +293,25 @@ export const unblockUSBDevice = async (vendorId: string, productId: string) => {
   }
 };
 
-// Additional device operations can be implemented here
+// New function to directly fix permanent blocking issue
+export const cleanupBlockingFiles = async () => {
+  try {
+    await checkServerHealth();
+    const API_BASE_URL = getApiBaseUrl();
+    
+    console.log("Requesting explicit cleanup of all blocking files");
+    
+    const response = await fetch(`${API_BASE_URL}/api/cleanup-blocking-files`, {
+      method: 'POST'
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error("Error cleaning up blocking files:", error);
+    throw new Error("Failed to clean up blocking files");
+  }
+};

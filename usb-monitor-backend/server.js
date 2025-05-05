@@ -1,4 +1,3 @@
-
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
@@ -33,7 +32,7 @@ app.use(express.json());
 // Initialize data files
 initializeDataFiles();
 
-// CRITICAL: Cleanup function to remove any persistent blocking services
+// CRITICAL: Enhanced cleanup function to remove any persistent blocking services
 const cleanupBlockingServices = () => {
   if (os.platform() === 'darwin') {
     try {
@@ -54,6 +53,13 @@ const cleanupBlockingServices = () => {
       execSync(`sudo rm -f /tmp/usb_block_*.sh 2>/dev/null || true`);
       execSync(`sudo rm -f /tmp/usb_forget.sh 2>/dev/null || true`);
       execSync(`sudo rm -f /tmp/usb_block.sh 2>/dev/null || true`);
+      
+      // Remove any blocking scripts in the system locations
+      execSync(`sudo rm -f /usr/local/bin/usb-monitor/enhanced-block-usb-storage.sh 2>/dev/null || true`);
+      
+      // Also try to reload the USB kexts to refresh the USB subsystem
+      execSync(`sudo kextload -b com.apple.driver.usb.massstorage 2>/dev/null || true`);
+      execSync(`sudo kextload -b com.apple.iokit.IOUSBMassStorageClass 2>/dev/null || true`);
       
       console.log("Cleanup completed successfully");
     } catch (err) {

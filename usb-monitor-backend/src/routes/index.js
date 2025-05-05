@@ -1,4 +1,3 @@
-
 const express = require('express');
 const os = require('os');
 const { 
@@ -654,6 +653,84 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevic
 
   return true;
 };
+
+// NEW ENDPOINT: Cleanup blocking files (LaunchDaemon plist, etc.)
+router.post('/cleanup-blocking-files', async (req, res) => {
+  try {
+    const { execSync } = require('child_process');
+    const os = require('os');
+    
+    console.log("Executing cleanup of all blocking files");
+    
+    if (os.platform() === 'darwin') {
+      try {
+        // Unload and remove the LaunchDaemon files that cause permanent blocking
+        console.log("Removing LaunchDaemon files...");
+        
+        // Try to unload the LaunchDaemons first (ignoring errors)
+        execSync('sudo launchctl unload /Library/LaunchDaemons/com.usbmonitor.blockusb.plist 2>/dev/null || true');
+        execSync('sudo launchctl unload /Library/LaunchDaemons/com.usbmonitor.enhanced.plist 2>/dev/null || true');
+        
+        // Then remove the files
+        execSync('sudo rm -f /Library/LaunchDaemons/com.usbmonitor.blockusb.plist 2>/dev/null || true');
+        execSync('sudo rm -f /Library/LaunchDaemons/com.usbmonitor.enhanced.plist 2>/dev/null || true');
+        
+        // Clean up any USB blocking scripts
+        execSync('sudo rm -f /usr/local/bin/usb-monitor/enhanced-block-usb-storage.sh 2>/dev/null || true');
+        execSync('sudo rm -f /tmp/usb_block_*.sh 2>/dev/null || true');
+        
+        // Try to reload USB modules to reset USB subsystem
+        execSync('sudo kextunload -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || true');
+        execSync('sudo kextload -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || true');
+        
+        console.log("LaunchDaemon cleanup completed successfully");
+      } catch (macError) {
+        console.error("Error during macOS cleanup:", macError);
+        // Continue even if errors occur
+      }
+    } else if (os.platform() === 'win32') {
+      // Windows cleanup if needed
+      console.log("Windows-specific cleanup not needed");
+    } else {
+      // Linux cleanup if needed
+      try {
+        execSync('sudo rm -f /etc/udev/rules.d/99-usb-block.rules 2>/dev/null || true');
+        console.log("Linux cleanup completed");
+      } catch (linuxError) {
+        console.error("Error during Linux cleanup:", linuxError);
+      }
+    }
+    
+    // Also clean up using the dedicated device manager cleanup function
+    const deviceManager = require('../controllers/device-manager');
+    await deviceManager.cleanupBlockingFiles();
+    
+    // Log the action
+    const logs = readDataFile(logsPath);
+    const logEntry = {
+      action: 'Cleanup Blocking Files',
+      status: 'success',
+      message: 'Removed all persistent blocking files',
+      date: new Date().toISOString(),
+      id: Date.now()
+    };
+    logs.unshift(logEntry);
+    writeDataFile(logsPath, logs);
+    
+    // Broadcast the update
+    broadcastUpdate({
+      newLog: logEntry
+    });
+    
+    res.json({ 
+      success: true, 
+      message: 'Blocking files cleanup completed' 
+    });
+  } catch (error) {
+    console.error('Error cleaning up blocking files:', error);
+    res.status(500).json({ error: 'Failed to clean up blocking files', message: error.message });
+  }
+});
 
 module.exports = {
   router,

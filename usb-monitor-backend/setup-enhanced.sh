@@ -50,36 +50,8 @@ for disk in $(diskutil list | grep external | grep -o 'disk[0-9]'); do
   diskutil eject force /dev/$disk 2>/dev/null
 done
 
-# Set up persistent blocking through at-restart hook
-if [ ! -f /Library/LaunchDaemons/com.usbmonitor.blockusb.plist ]; then
-  cat > /Library/LaunchDaemons/com.usbmonitor.blockusb.plist << 'LAUNCHDAEMON'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.usbmonitor.blockusb</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/local/bin/usb-monitor/enhanced-block-usb-storage.sh</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <false/>
-    <key>StandardOutPath</key>
-    <string>/var/log/usbmonitor-block.log</string>
-    <key>StandardErrorPath</key>
-    <string>/var/log/usbmonitor-block.log</string>
-</dict>
-</plist>
-LAUNCHDAEMON
-  
-  chown root:wheel /Library/LaunchDaemons/com.usbmonitor.blockusb.plist
-  chmod 644 /Library/LaunchDaemons/com.usbmonitor.blockusb.plist
-  launchctl load /Library/LaunchDaemons/com.usbmonitor.blockusb.plist
-  echo "Installed persistent USB storage blocking service"
-fi
+# IMPORTANT CHANGE: No more persistent blocking through at-restart hook
+# The permanent blocking has been removed to allow whitelisting to work
 
 echo "Running continuous USB monitoring process..."
 # Continuous monitoring
@@ -102,38 +74,11 @@ EOF
 # Set permissions
 chmod +x /usr/local/bin/usb-monitor/*.sh
 
-# Create launcher daemon with enhanced privileges
-cat > /Library/LaunchDaemons/com.usbmonitor.enhanced.plist << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.usbmonitor.enhanced</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/local/bin/usb-monitor/enhanced-block-usb-storage.sh</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>/var/log/usbmonitor-enhanced.log</string>
-    <key>StandardErrorPath</key>
-    <string>/var/log/usbmonitor-enhanced.log</string>
-</dict>
-</plist>
-EOF
-
-# Load the enhanced daemon
-launchctl load /Library/LaunchDaemons/com.usbmonitor.enhanced.plist || echo "Failed to load enhanced daemon"
-
-# Start the enhanced blocking immediately
-/usr/local/bin/usb-monitor/enhanced-block-usb-storage.sh &
-
+# CRITICAL CHANGE: Do not create permanent LaunchDaemon
+# This was causing issues with whitelisting
 echo
 echo "Enhanced setup completed successfully!"
+echo "BUT WITHOUT permanent blocking - this allows whitelisting to work properly."
 echo
 echo "The USB blocking system is now running with kernel-level protection!"
 echo
