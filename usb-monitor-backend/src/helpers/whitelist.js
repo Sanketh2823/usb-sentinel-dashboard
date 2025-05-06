@@ -1,3 +1,4 @@
+
 /**
  * Helper to check if a USB device is whitelisted.
  * @param {object} device
@@ -12,14 +13,20 @@ function isWhitelisted(device, whitelistedDevices) {
   // Enhanced logging to help debug whitelist issues
   console.log(`Checking whitelist for device: ${deviceVendorId}:${deviceProductId}`);
   console.log(`Number of whitelisted devices: ${whitelistedDevices.length}`);
+  console.log(`Whitelisted devices: ${JSON.stringify(whitelistedDevices)}`);
   
-  // More strict whitelist checking
+  // More strict whitelist checking with additional debugging
   const isInWhitelist = whitelistedDevices.some(
     (d) => {
-      const whitelistedVendorId = d.vendorId.toLowerCase();
-      const whitelistedProductId = d.productId.toLowerCase();
+      // Ensure vendorId and productId are strings and lowercase
+      const whitelistedVendorId = (d.vendorId || '').toString().toLowerCase();
+      const whitelistedProductId = (d.productId || '').toString().toLowerCase();
+      
+      // Compare normalized values
       const isMatch = whitelistedVendorId === deviceVendorId && 
                      whitelistedProductId === deviceProductId;
+      
+      console.log(`Comparing whitelist entry: ${whitelistedVendorId}:${whitelistedProductId} with device: ${deviceVendorId}:${deviceProductId} - Match: ${isMatch}`);
       
       if (isMatch) {
         console.log(`Found whitelist match: ${d.name || 'Unknown device'}`);

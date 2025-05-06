@@ -29,6 +29,13 @@ kextutil -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || echo "Unable to load 
 kextutil -b com.apple.driver.usb.massstorage 2>/dev/null || echo "Unable to load usb.massstorage - may already be loaded"
 kextutil -b com.apple.iokit.IOUSBMassStorageClass 2>/dev/null || echo "Unable to load IOUSBMassStorageClass - may already be loaded"
 
+# CRITICAL: Remove any existing permanent blocking files that may interfere with whitelisting
+echo "Removing any existing permanent blocking files..."
+launchctl unload /Library/LaunchDaemons/com.usbmonitor.blockusb.plist 2>/dev/null || true
+launchctl unload /Library/LaunchDaemons/com.usbmonitor.enhanced.plist 2>/dev/null || true
+rm -f /Library/LaunchDaemons/com.usbmonitor.blockusb.plist 2>/dev/null || true
+rm -f /Library/LaunchDaemons/com.usbmonitor.enhanced.plist 2>/dev/null || true
+
 # Create enhanced blocking script directories
 mkdir -p /usr/local/bin/usb-monitor
 
@@ -74,8 +81,12 @@ EOF
 # Set permissions
 chmod +x /usr/local/bin/usb-monitor/*.sh
 
-# CRITICAL CHANGE: Do not create permanent LaunchDaemon
-# This was causing issues with whitelisting
+# CRITICAL: Explicitly reload USB subsystem to ensure clean state
+echo "Reloading USB subsystem for a clean state..."
+kextunload -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || true
+sleep 1
+kextload -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || true
+
 echo
 echo "Enhanced setup completed successfully!"
 echo "BUT WITHOUT permanent blocking - this allows whitelisting to work properly."

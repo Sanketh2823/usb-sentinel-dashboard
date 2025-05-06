@@ -29,10 +29,12 @@ export const addDeviceToWhitelist = async (device: any) => {
     logIdProcessing("Product", device.productId, normalizedProductId);
     logIdProcessing("Vendor", device.vendorId, normalizedVendorId);
     
+    // Ensure device has name field
     const normalizedDevice = {
       ...device,
       productId: normalizedProductId,
-      vendorId: normalizedVendorId
+      vendorId: normalizedVendorId,
+      name: device.name || `Device ${normalizedVendorId}:${normalizedProductId}`
     };
     
     console.log("Adding to whitelist with normalized IDs:", normalizedDevice);
@@ -51,6 +53,10 @@ export const addDeviceToWhitelist = async (device: any) => {
           productId: normalizedProductId
         })
       });
+      
+      console.log("Unblock response status:", unblockResponse.status);
+      const unblockData = await unblockResponse.json();
+      console.log("Unblock response data:", unblockData);
       
       if (!unblockResponse.ok) {
         console.warn("Unblock operation returned non-OK status:", unblockResponse.status);
@@ -74,14 +80,19 @@ export const addDeviceToWhitelist = async (device: any) => {
     }
     
     // Now add to whitelist
+    console.log("Sending whitelist addition request with data:", JSON.stringify(normalizedDevice));
     const response = await fetch(`${API_BASE_URL}/api/whitelist`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(normalizedDevice)
     });
     
+    console.log("Whitelist addition response status:", response.status);
+    
     if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
+      const errorText = await response.text();
+      console.error("Whitelist addition error:", errorText);
+      throw new Error(`HTTP error! Status: ${response.status}, Details: ${errorText}`);
     }
     
     const result = await response.json();

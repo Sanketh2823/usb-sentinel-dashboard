@@ -208,11 +208,15 @@ router.post('/whitelist', async (req, res) => {
       return res.status(400).json({ error: 'Vendor ID and Product ID are required' });
     }
     
+    console.log("Received whitelist request for device:", JSON.stringify(device));
+    
     const whitelistedDevices = readDataFile(whitelistPath);
     
     // Format the device IDs for consistency
     const { formatDeviceIds, unblockWhitelistedDevice } = require('../helpers/whitelist');
     const formattedDevice = formatDeviceIds(device);
+    
+    console.log("Formatted device for whitelist:", JSON.stringify(formattedDevice));
     
     // Check if device is already whitelisted
     const isAlreadyWhitelisted = whitelistedDevices.some(
@@ -251,8 +255,11 @@ router.post('/whitelist', async (req, res) => {
         ...formattedDevice,
         dateAdded: new Date().toISOString(),
         id: Date.now(),
-        status: "allowed" // Ensure status is explicitly set to 'allowed'
+        status: "allowed", // Ensure status is explicitly set to 'allowed'
+        name: device.name || formattedDevice.manufacturer || `Device ${formattedDevice.vendorId}:${formattedDevice.productId}`
       };
+      
+      console.log("Adding new device to whitelist:", JSON.stringify(whitelistEntry));
       
       // Add device to whitelist
       whitelistedDevices.push(whitelistEntry);
@@ -262,7 +269,7 @@ router.post('/whitelist', async (req, res) => {
       const logs = readDataFile(logsPath);
       const logEntry = {
         action: 'Add to Whitelist',
-        device: `${device.name || formattedDevice.manufacturer || 'Unknown device'} (${formattedDevice.vendorId}:${formattedDevice.productId})`,
+        device: `${whitelistEntry.name || 'Unknown device'} (${formattedDevice.vendorId}:${formattedDevice.productId})`,
         date: new Date().toISOString(),
         status: unblockResult ? 'success' : 'partial',
         message: unblockResult ? 'Device whitelisted and unblocked' : 'Device whitelisted but may need reconnection',
@@ -294,6 +301,8 @@ router.post('/whitelist', async (req, res) => {
         // Update the status to "allowed"
         whitelistedDevices[existingDeviceIndex].status = "allowed";
         writeDataFile(whitelistPath, whitelistedDevices);
+        
+        console.log("Updated existing whitelisted device:", JSON.stringify(whitelistedDevices[existingDeviceIndex]));
       }
       
       // Log the action for already whitelisted device
