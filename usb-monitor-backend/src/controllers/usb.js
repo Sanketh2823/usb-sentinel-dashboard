@@ -3,6 +3,7 @@ const { exec } = require('child_process');
 const { getDeviceClass } = require('../utils/device');
 const { execPromise } = require('../utils/system');
 const { blockSpecificUsbDeviceOnMacOS, blockUsbClassOnMacOS } = require('./macos');
+const fs = require('fs');
 
 // Function to block/eject a USB device (macOS: attempt full blocking for any non-whitelisted device)
 const blockUSBDevice = async (vendorId, productId) => {
@@ -22,60 +23,66 @@ const blockUSBDevice = async (vendorId, productId) => {
       return true;
     });
   } else if (platform === 'darwin') {
-    // macOS: attempt storage unmount, class-based kextunload, and aggressive power/port actions
+    // macOS: improved blocking approach
     try {
-      // 1. Try to find and unmount the device (if storage)
-      const checkCommand = `system_profiler SPUSBDataType | grep -A 20 "Vendor ID: 0x${vendorIdHex}" | grep -A 15 "Product ID: 0x${productIdHex}" | grep "BSD Name:"`;
-      exec(checkCommand, (error, stdout, stderr) => {
-        if (stdout && stdout.includes("BSD Name:")) {
-          // It looks like storage
-          const bsdMatch = stdout.match(/BSD Name:\s+(\w+)/);
-          if (bsdMatch && bsdMatch[1]) {
-            const bsdName = bsdMatch[1];
-            const unmountCommand = `diskutil unmountDisk force /dev/${bsdName}`;
-            exec(unmountCommand, (error2, stdout2, stderr2) => {
-              if (error2) {
-                console.error(`Error forcibly unmounting disk: ${error2.message}`);
-              } else {
-                console.log(`Successfully forcibly unmounted disk: ${bsdName}`);
-              }
-            });
-          }
-        } else {
-          // Not storage, keep going
-          // 2. Try aggressive class-based blocking for everything that's not allowed
-          getDeviceClass(vendorIdHex, productIdHex).then(async (deviceClass) => {
-            // Unload class driver (even for non-storage, to be safe)
-            if (deviceClass) {
-              await blockUsbClassOnMacOS(deviceClass);
-            }
-            // 3. Attempt force block using IOKit/power tricks (even for charge cables)
-            // Try to block the device on its port, if possible (location-based)
-            const usbInfoCmd = `system_profiler SPUSBDataType | grep -B 10 -A 30 "Vendor ID: 0x${vendorIdHex}" | grep -B 10 -A 30 "Product ID: 0x${productIdHex}"`;
-            execPromise(usbInfoCmd).then(({ stdout: portInfo }) => {
-              if (portInfo && portInfo.includes("Location ID:")) {
-                const loc = portInfo.match(/Location ID:\s+(0x[0-9a-fA-F]+)/);
-                if (loc && loc[1]) {
-                  const locationId = loc[1];
-                  const disableCmd = `sudo ioreg -p IOUSB -l -w 0 | grep -A 20 "${locationId}" | grep "IOPowerManagement" -A 5`;
-                  exec(disableCmd, (err, so, se) => {
-                    if (err) {
-                      console.error("Error (force-port) disabling device via IOPowerManagement:", err);
-                    } else {
-                      console.log("Ran IOPowerManagement disable command for USB device location", locationId);
-                    }
-                  });
-                }
-              }
-            });
-          });
+      // Write a temporary blocking script specifically for this device
+      const blockScriptPath = `/tmp/usb_block_${vendorIdHex}_${productIdHex}.sh`;
+      const blockScript = `
+#!/bin/bash
+# Blocking script for USB device ${vendorIdHex}:${productIdHex}
+echo "Starting blocking for device ${vendorIdHex}:${productIdHex} at $(date)"
+
+# Try to find and unmount the device if it's storage
+system_profiler SPUSBDataType | grep -B 10 -A 40 "Vendor ID: 0x${vendorIdHex}" | grep -B 10 -A 30 "Product ID: 0x${productIdHex}" | grep "BSD Name:" | while read -r line; do
+  bsd_name=$(echo $line | awk '{print $3}')
+  if [ -n "$bsd_name" ]; then
+    echo "Found BSD name: $bsd_name, unmounting..."
+    diskutil unmountDisk force /dev/$bsd_name
+    diskutil eject force /dev/$bsd_name
+  fi
+done
+
+# Run continuous monitoring for this specific device
+while true; do
+  # Check if the device is connected
+  if system_profiler SPUSBDataType | grep -B 10 -A 40 "Vendor ID: 0x${vendorIdHex}" | grep -B 10 -A 30 "Product ID: 0x${productIdHex}" | grep -q "Product ID:"; then
+    echo "Device ${vendorIdHex}:${productIdHex} detected at $(date), blocking..."
+    
+    # Block through unmounting if it's storage
+    system_profiler SPUSBDataType | grep -B 10 -A 40 "Vendor ID: 0x${vendorIdHex}" | grep -B 10 -A 30 "Product ID: 0x${productIdHex}" | grep "BSD Name:" | while read -r line; do
+      bsd_name=$(echo $line | awk '{print $3}')
+      if [ -n "$bsd_name" ]; then
+        echo "Found BSD name: $bsd_name, unmounting..."
+        diskutil unmountDisk force /dev/$bsd_name
+        diskutil eject force /dev/$bsd_name
+      fi
+    done
+  fi
+  sleep 2
+done
+`;
+
+      // Write the script to a temporary file
+      fs.writeFileSync(blockScriptPath, blockScript, { mode: 0o755 });
+      
+      // Execute the script in the background
+      exec(`nohup bash ${blockScriptPath} > /tmp/usb_block_${vendorIdHex}_${productIdHex}.log 2>&1 &`);
+      
+      console.log(`Created and started blocking script for device ${vendorIdHex}:${productIdHex}`);
+      
+      // Also try aggressive class-based blocking if we can determine the class
+      getDeviceClass(vendorIdHex, productIdHex).then(async (deviceClass) => {
+        // Unload class driver (even for non-storage, to be safe)
+        if (deviceClass) {
+          await blockUsbClassOnMacOS(deviceClass);
         }
       });
+      
+      return true;
     } catch (err) {
       console.error("Error in macOS device block procedure:", err);
       return false;
     }
-    return true;
   } else {
     // Linux - using USB authorization or udev rules
     const command = `echo 0 > /sys/bus/usb/devices/$(lsusb -d ${vendorId}:${productId} | cut -d: -f1 | cut -d' ' -f2)-$(lsusb -d ${vendorId}:${productId} | cut -d: -f2 | cut -d' ' -f1)/authorized`;
@@ -97,32 +104,81 @@ const forceBlockUSBDevice = async (vendorId, productId) => {
   
   try {
     if (platform === 'darwin') {
-      return await blockSpecificUsbDeviceOnMacOS(vendorId, productId);
-    } else if (platform === 'win32') {
-      // Windows implementation (existing code)
+      // For macOS, use the more aggressive blockSpecificUsbDeviceOnMacOS function
+      const result = await blockSpecificUsbDeviceOnMacOS(vendorId, productId);
+      
+      // Also use our standard blocking as a backup
+      await blockUSBDevice(vendorId, productId);
+      
+      return { success: true, message: 'Device blocking successfully initiated' };
+    } else {
+      // Windows - using PowerShell to disable device
       const command = `powershell "Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorId}&PID_${productId}*' } | Disable-PnpDevice -Confirm:$false"`;
       exec(command, (error, stdout, stderr) => {
         if (error) {
           console.error(`Error blocking device on Windows: ${error.message}`);
-          return false;
+          return { success: false, message: error.message };
         }
-        return true;
       });
-      return { success: true, message: 'Windows blocking attempted' };
-    } else {
-      // Linux implementation (existing code)
-      const command = `echo 0 > /sys/bus/usb/devices/$(lsusb -d ${vendorId}:${productId} | cut -d: -f1 | cut -d' ' -f2)-$(lsusb -d ${vendorId}:${productId} | cut -d: -f2 | cut -d' ' -f1)/authorized`;
-      exec(command, (error, stdout, stderr) => {
-        if (error) {
-          console.error(`Error blocking device on Linux: ${error.message}`);
-          return false;
-        }
-        return true;
-      });
-      return { success: true, message: 'Linux blocking attempted' };
+      return { success: true, message: 'Device blocking attempted on Windows' };
     }
   } catch (error) {
     console.error(`Error with force block: ${error.message}`);
+    return { success: false, message: error.message };
+  }
+};
+
+// New function to unblock a specific USB device
+const unblockUSBDevice = async (vendorId, productId) => {
+  const platform = os.platform();
+  console.log(`Attempting to unblock device ${vendorId}:${productId} on ${platform}`);
+  
+  // Standardize input for matching
+  const vendorIdHex = typeof vendorId === 'string' ? vendorId.replace(/^0x/i, '').padStart(4, '0').toLowerCase() : vendorId.toString(16).padStart(4, '0').toLowerCase();
+  const productIdHex = typeof productId === 'string' ? productId.replace(/^0x/i, '').padStart(4, '0').toLowerCase() : productId.toString(16).padStart(4, '0').toLowerCase();
+
+  try {
+    if (platform === 'darwin') {
+      // Kill any running blocking processes for this device
+      const blockScriptPath = `/tmp/usb_block_${vendorIdHex}_${productIdHex}.sh`;
+      
+      // Find and kill the blocking process
+      exec(`ps -ef | grep "${blockScriptPath}" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null || true`);
+      
+      // Remove the blocking script
+      if (fs.existsSync(blockScriptPath)) {
+        fs.unlinkSync(blockScriptPath);
+      }
+      
+      // Reload USB drivers
+      exec("sudo kextload -b com.apple.driver.usb.massstorage 2>/dev/null || true");
+      exec("sudo kextload -b com.apple.iokit.IOUSBMassStorageClass 2>/dev/null || true");
+      
+      console.log(`Successfully unblocked device ${vendorIdHex}:${productIdHex}`);
+      return { success: true, message: 'Device unblocked successfully' };
+    } else if (platform === 'win32') {
+      // Windows - using PowerShell to enable device
+      const command = `powershell "Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorIdHex}&PID_${productIdHex}*' } | Enable-PnpDevice -Confirm:$false"`;
+      exec(command, (error, stdout, stderr) => {
+        if (error) {
+          console.error(`Error unblocking device on Windows: ${error.message}`);
+          return { success: false, message: error.message };
+        }
+      });
+      return { success: true, message: 'Device unblocking attempted on Windows' };
+    } else {
+      // Linux
+      const command = `echo 1 > /sys/bus/usb/devices/$(lsusb -d ${vendorIdHex}:${productIdHex} | cut -d: -f1 | cut -d' ' -f2)-$(lsusb -d ${vendorIdHex}:${productIdHex} | cut -d: -f2 | cut -d' ' -f1)/authorized`;
+      exec(command, (error, stdout, stderr) => {
+        if (error) {
+          console.error(`Error unblocking device on Linux: ${error.message}`);
+          return { success: false, message: error.message };
+        }
+      });
+      return { success: true, message: 'Device unblocking attempted on Linux' };
+    }
+  } catch (error) {
+    console.error(`Error unblocking device: ${error.message}`);
     return { success: false, message: error.message };
   }
 };
@@ -278,6 +334,7 @@ const refreshUSBDevices = async (platform) => {
 module.exports = {
   blockUSBDevice,
   forceBlockUSBDevice,
+  unblockUSBDevice,
   ejectUSBDevice,
   refreshUSBDevices
 };

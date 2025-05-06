@@ -57,11 +57,8 @@ for disk in $(diskutil list | grep external | grep -o 'disk[0-9]'); do
   diskutil eject force /dev/$disk 2>/dev/null
 done
 
-# IMPORTANT CHANGE: No more persistent blocking through at-restart hook
-# The permanent blocking has been removed to allow whitelisting to work
-
+# Add a more aggressive monitor that runs continuously in background
 echo "Running continuous USB monitoring process..."
-# Continuous monitoring
 while true; do
   # Check for newly connected USB storage devices
   system_profiler SPUSBDataType | grep -A 10 "Mass Storage" | grep -B 5 -A 5 "BSD Name:" | while read -r line; do
@@ -78,8 +75,48 @@ done &
 echo "Enhanced blocking active! USB storage devices will be blocked."
 EOF
 
+# Create a startup script that enables blocking at boot time
+# This will run when the system starts but still allow whitelisting
+cat > /usr/local/bin/usb-monitor/usb-monitor-startup.sh << 'EOF'
+#!/bin/bash
+
+# Start the USB blocking service
+/usr/local/bin/usb-monitor/enhanced-block-usb-storage.sh &
+
+# Log the startup
+echo "USB Monitor started at $(date)" >> /var/log/usbmonitor-startup.log
+EOF
+
 # Set permissions
 chmod +x /usr/local/bin/usb-monitor/*.sh
+
+# CRITICAL: Create a LaunchDaemon for startup that doesn't interfere with whitelist
+cat > /Library/LaunchDaemons/com.usbmonitor.startup.plist << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.usbmonitor.startup</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/usb-monitor/usb-monitor-startup.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/usbmonitor-enhanced.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/usbmonitor-enhanced.log</string>
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>
+EOF
+
+# Load the startup daemon
+echo "Loading the USB Monitor startup daemon..."
+launchctl load -w /Library/LaunchDaemons/com.usbmonitor.startup.plist 2>/dev/null || echo "Warning: Could not load startup daemon - you may need to restart"
 
 # CRITICAL: Explicitly reload USB subsystem to ensure clean state
 echo "Reloading USB subsystem for a clean state..."
@@ -87,9 +124,13 @@ kextunload -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || true
 sleep 1
 kextload -b com.apple.iokit.IOUSBHostFamily 2>/dev/null || true
 
+# Start the blocking immediately 
+echo "Starting enhanced USB blocking immediately..."
+/usr/local/bin/usb-monitor/enhanced-block-usb-storage.sh &
+
 echo
 echo "Enhanced setup completed successfully!"
-echo "BUT WITHOUT permanent blocking - this allows whitelisting to work properly."
+echo "USB blocking is now active while allowing whitelisting to work properly."
 echo
 echo "The USB blocking system is now running with kernel-level protection!"
 echo
