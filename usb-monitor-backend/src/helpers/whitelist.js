@@ -49,13 +49,14 @@ const isWhitelisted = (device, whitelistedDevices) => {
   return isInWhitelist;
 };
 
-// Unblock a device that is on the whitelist
+// Unblock a device that is on the whitelist (multi-platform)
 const unblockWhitelistedDevice = async (device) => {
   console.log(`Attempting to unblock whitelisted device ${device.vendorId}:${device.productId}`);
   
   const normalizedDevice = formatDeviceIds(device);
+  const platform = os.platform();
   
-  if (os.platform() === 'darwin') {
+  if (platform === 'darwin') {
     try {
       // 1. Try to reload USB mass storage drivers if they were unloaded
       console.log("Reloading USB mass storage drivers...");
@@ -102,8 +103,76 @@ const unblockWhitelistedDevice = async (device) => {
       console.error(`Error unblocking whitelisted device: ${error.message}`);
       return false;
     }
+  } else if (platform === 'win32') {
+    try {
+      // Import and use the Windows controller to unblock the device
+      const windowsController = require('../controllers/windows');
+      
+      if (windowsController) {
+        const result = await windowsController.unblockUsbDeviceOnWindows(
+          normalizedDevice.vendorId,
+          normalizedDevice.productId
+        );
+        
+        // Mark the whitelist status as "allowed"
+        const whitelistedDevices = readDataFile(whitelistPath);
+        const existingDeviceIndex = whitelistedDevices.findIndex(
+          d => d.vendorId.toLowerCase() === normalizedDevice.vendorId && 
+               d.productId.toLowerCase() === normalizedDevice.productId
+        );
+        
+        if (existingDeviceIndex >= 0) {
+          whitelistedDevices[existingDeviceIndex].status = "allowed";
+          writeDataFile(whitelistPath, whitelistedDevices);
+          console.log("Updated whitelist device status to 'allowed'");
+        }
+        
+        console.log(`Windows unblock result: ${JSON.stringify(result)}`);
+        return result.success;
+      }
+      
+      console.log("Windows controller not available");
+      return false;
+    } catch (error) {
+      console.error(`Error unblocking whitelisted device on Windows: ${error.message}`);
+      return false;
+    }
+  } else if (platform === 'linux') {
+    try {
+      // Import and use the Linux controller to unblock the device
+      const linuxController = require('../controllers/linux');
+      
+      if (linuxController) {
+        const result = await linuxController.unblockUsbDeviceOnLinux(
+          normalizedDevice.vendorId,
+          normalizedDevice.productId
+        );
+        
+        // Mark the whitelist status as "allowed"
+        const whitelistedDevices = readDataFile(whitelistPath);
+        const existingDeviceIndex = whitelistedDevices.findIndex(
+          d => d.vendorId.toLowerCase() === normalizedDevice.vendorId && 
+               d.productId.toLowerCase() === normalizedDevice.productId
+        );
+        
+        if (existingDeviceIndex >= 0) {
+          whitelistedDevices[existingDeviceIndex].status = "allowed";
+          writeDataFile(whitelistPath, whitelistedDevices);
+          console.log("Updated whitelist device status to 'allowed'");
+        }
+        
+        console.log(`Linux unblock result: ${JSON.stringify(result)}`);
+        return result.success;
+      }
+      
+      console.log("Linux controller not available");
+      return false;
+    } catch (error) {
+      console.error(`Error unblocking whitelisted device on Linux: ${error.message}`);
+      return false;
+    }
   } else {
-    console.log("Unblocking not implemented for this platform yet");
+    console.log(`Unblocking not implemented for platform ${platform} yet`);
     return false;
   }
 };

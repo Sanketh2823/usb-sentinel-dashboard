@@ -1,3 +1,4 @@
+
 const os = require('os');
 const { exec } = require('child_process');
 const { getDeviceClass } = require('../utils/device');
@@ -5,7 +6,11 @@ const { execPromise } = require('../utils/system');
 const { blockSpecificUsbDeviceOnMacOS, blockUsbClassOnMacOS } = require('./macos');
 const fs = require('fs');
 
-// Function to block/eject a USB device (macOS: attempt full blocking for any non-whitelisted device)
+// Import platform-specific implementations
+const windowsController = os.platform() === 'win32' ? require('./windows') : null;
+const linuxController = os.platform() === 'linux' ? require('./linux') : null;
+
+// Function to block/eject a USB device (multi-platform)
 const blockUSBDevice = async (vendorId, productId) => {
   const platform = os.platform();
   
@@ -13,15 +18,9 @@ const blockUSBDevice = async (vendorId, productId) => {
   const vendorIdHex = typeof vendorId === 'string' ? vendorId.replace(/^0x/i, '').padStart(4, '0').toLowerCase() : vendorId.toString(16).padStart(4, '0').toLowerCase();
   const productIdHex = typeof productId === 'string' ? productId.replace(/^0x/i, '').padStart(4, '0').toLowerCase() : productId.toString(16).padStart(4, '0').toLowerCase();
 
-  if (platform === 'win32') {
-    const command = `powershell "Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorId}&PID_${productId}*' } | Disable-PnpDevice -Confirm:$false"`;
-    exec(command, (error, stdout, stderr) => {
-      if (error) {
-        console.error(`Error blocking device on Windows: ${error.message}`);
-        return false;
-      }
-      return true;
-    });
+  if (platform === 'win32' && windowsController) {
+    console.log('Using Windows-specific implementation for blocking');
+    return await windowsController.blockUsbDeviceOnWindows(vendorIdHex, productIdHex);
   } else if (platform === 'darwin') {
     // macOS: improved blocking approach
     try {
@@ -83,21 +82,16 @@ done
       console.error("Error in macOS device block procedure:", err);
       return false;
     }
+  } else if (platform === 'linux' && linuxController) {
+    console.log('Using Linux-specific implementation for blocking');
+    return await linuxController.blockUsbDeviceOnLinux(vendorIdHex, productIdHex);
   } else {
-    // Linux - using USB authorization or udev rules
-    const command = `echo 0 > /sys/bus/usb/devices/$(lsusb -d ${vendorId}:${productId} | cut -d: -f1 | cut -d' ' -f2)-$(lsusb -d ${vendorId}:${productId} | cut -d: -f2 | cut -d' ' -f1)/authorized`;
-    exec(command, (error, stdout, stderr) => {
-      if (error) {
-        console.error(`Error blocking device on Linux: ${error.message}`);
-        return false;
-      }
-      return true;
-    });
+    console.log(`Platform ${platform} not fully supported for blocking yet`);
+    return { success: false, message: `Platform ${platform} not fully supported for blocking yet` };
   }
-  return true;
 };
 
-// Enhanced function to block a USB device using macOS-specific improvements
+// Enhanced function to block a USB device using platform-specific implementations
 const forceBlockUSBDevice = async (vendorId, productId) => {
   const platform = os.platform();
   console.log(`Attempting to force block device ${vendorId}:${productId} on ${platform}`);
@@ -111,16 +105,12 @@ const forceBlockUSBDevice = async (vendorId, productId) => {
       await blockUSBDevice(vendorId, productId);
       
       return { success: true, message: 'Device blocking successfully initiated' };
+    } else if (platform === 'win32' && windowsController) {
+      return await windowsController.blockUsbDeviceOnWindows(vendorId, productId);
+    } else if (platform === 'linux' && linuxController) {
+      return await linuxController.blockUsbDeviceOnLinux(vendorId, productId);
     } else {
-      // Windows - using PowerShell to disable device
-      const command = `powershell "Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorId}&PID_${productId}*' } | Disable-PnpDevice -Confirm:$false"`;
-      exec(command, (error, stdout, stderr) => {
-        if (error) {
-          console.error(`Error blocking device on Windows: ${error.message}`);
-          return { success: false, message: error.message };
-        }
-      });
-      return { success: true, message: 'Device blocking attempted on Windows' };
+      return { success: false, message: `Platform ${platform} not fully supported for blocking yet` };
     }
   } catch (error) {
     console.error(`Error with force block: ${error.message}`);
@@ -128,7 +118,7 @@ const forceBlockUSBDevice = async (vendorId, productId) => {
   }
 };
 
-// New function to unblock a specific USB device
+// Function to unblock a specific USB device
 const unblockUSBDevice = async (vendorId, productId) => {
   const platform = os.platform();
   console.log(`Attempting to unblock device ${vendorId}:${productId} on ${platform}`);
@@ -156,26 +146,12 @@ const unblockUSBDevice = async (vendorId, productId) => {
       
       console.log(`Successfully unblocked device ${vendorIdHex}:${productIdHex}`);
       return { success: true, message: 'Device unblocked successfully' };
-    } else if (platform === 'win32') {
-      // Windows - using PowerShell to enable device
-      const command = `powershell "Get-PnpDevice | Where-Object { $_.HardwareID -like '*VID_${vendorIdHex}&PID_${productIdHex}*' } | Enable-PnpDevice -Confirm:$false"`;
-      exec(command, (error, stdout, stderr) => {
-        if (error) {
-          console.error(`Error unblocking device on Windows: ${error.message}`);
-          return { success: false, message: error.message };
-        }
-      });
-      return { success: true, message: 'Device unblocking attempted on Windows' };
+    } else if (platform === 'win32' && windowsController) {
+      return await windowsController.unblockUsbDeviceOnWindows(vendorIdHex, productIdHex);
+    } else if (platform === 'linux' && linuxController) {
+      return await linuxController.unblockUsbDeviceOnLinux(vendorIdHex, productIdHex);
     } else {
-      // Linux
-      const command = `echo 1 > /sys/bus/usb/devices/$(lsusb -d ${vendorIdHex}:${productIdHex} | cut -d: -f1 | cut -d' ' -f2)-$(lsusb -d ${vendorIdHex}:${productIdHex} | cut -d: -f2 | cut -d' ' -f1)/authorized`;
-      exec(command, (error, stdout, stderr) => {
-        if (error) {
-          console.error(`Error unblocking device on Linux: ${error.message}`);
-          return { success: false, message: error.message };
-        }
-      });
-      return { success: true, message: 'Device unblocking attempted on Linux' };
+      return { success: false, message: `Platform ${platform} not fully supported for unblocking yet` };
     }
   } catch (error) {
     console.error(`Error unblocking device: ${error.message}`);
@@ -183,7 +159,7 @@ const unblockUSBDevice = async (vendorId, productId) => {
   }
 };
 
-// Modified ejectUSBDevice function with improved macOS support
+// Modified ejectUSBDevice function with improved multi-platform support
 const ejectUSBDevice = async (vendorId, productId, platform) => {
   let command;
   
@@ -303,7 +279,7 @@ const ejectUSBDevice = async (vendorId, productId, platform) => {
   });
 };
 
-// New function to refresh USB devices
+// Function to refresh USB devices
 const refreshUSBDevices = async (platform) => {
   let command;
   
@@ -331,10 +307,27 @@ const refreshUSBDevices = async (platform) => {
   });
 };
 
+// Add a function to start USB monitoring for the current platform
+const startPlatformUsbMonitoring = (callback) => {
+  const platform = os.platform();
+  
+  if (platform === 'win32' && windowsController) {
+    return windowsController.startUsbMonitoring(callback);
+  } else if (platform === 'linux' && linuxController) {
+    // Make sure dependencies are installed
+    linuxController.setupLinuxDependencies();
+    return linuxController.startUsbMonitoring(callback);
+  } else {
+    console.log(`Platform ${platform} monitoring implemented separately`);
+    return { stop: () => {} }; // Return dummy stop function
+  }
+};
+
 module.exports = {
   blockUSBDevice,
   forceBlockUSBDevice,
   unblockUSBDevice,
   ejectUSBDevice,
-  refreshUSBDevices
+  refreshUSBDevices,
+  startPlatformUsbMonitoring
 };
