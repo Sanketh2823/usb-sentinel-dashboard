@@ -78,8 +78,13 @@ setBroadcastWss(wss);
 // Set up USB monitoring
 setupUsbMonitor(usbDetect, broadcastUpdate);
 
-// Register routes
-app.use('/api', router);
+// Import new route modules
+const quarantineRoutes = require('./src/routes/quarantine');
+const auditRoutes = require('./src/routes/audit');
+
+// Register new routes
+app.use('/api/quarantine', quarantineRoutes.router);
+app.use('/api/audit-logs', auditRoutes.router);
 
 // Add a simple health check route
 app.get('/health', (req, res) => {

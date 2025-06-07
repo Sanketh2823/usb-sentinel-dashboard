@@ -1,50 +1,52 @@
-
-const path = require('path');
 const fs = require('fs');
 
-// Data storage paths
-const dataDir = path.join(__dirname, '../../data');
-const whitelistPath = path.join(dataDir, 'whitelist.json');
-const blockedAttemptsPath = path.join(dataDir, 'blocked-attempts.json');
-const logsPath = path.join(dataDir, 'logs.json');
-const allowedClassesPath = path.join(dataDir, 'allowed-classes.json');
+const whitelistPath = './data/whitelist.json';
+const blockedAttemptsPath = './data/blockedAttempts.json';
+const logsPath = './data/logs.json';
+const allowedClassesPath = './data/allowedClasses.json';
+const quarantinePath = './data/quarantine.json';
+const auditPath = './data/audit.json';
 
-// Create data directory if it doesn't exist
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-}
-
-// Initialize data files if they don't exist
 const initializeDataFiles = () => {
   if (!fs.existsSync(whitelistPath)) {
-    fs.writeFileSync(whitelistPath, JSON.stringify([]));
+    fs.writeFileSync(whitelistPath, JSON.stringify([], null, 2));
+    console.log('Created whitelist.json file');
   }
-  
+
   if (!fs.existsSync(blockedAttemptsPath)) {
-    fs.writeFileSync(blockedAttemptsPath, JSON.stringify([]));
+    fs.writeFileSync(blockedAttemptsPath, JSON.stringify([], null, 2));
+    console.log('Created blockedAttempts.json file');
   }
-  
+
   if (!fs.existsSync(logsPath)) {
-    fs.writeFileSync(logsPath, JSON.stringify([]));
+    fs.writeFileSync(logsPath, JSON.stringify([], null, 2));
+    console.log('Created logs.json file');
   }
 
   if (!fs.existsSync(allowedClassesPath)) {
-    // Default allowed device classes: keyboard (03), mouse (03), webcam/video (0e), audio (01)
-    fs.writeFileSync(allowedClassesPath, JSON.stringify([
-      { id: "03", name: "HID (Human Interface Device)", description: "Keyboards, mice, etc." },
-      { id: "01", name: "Audio", description: "Audio devices" },
-      { id: "0e", name: "Video", description: "Webcams" }
-    ]));
+    fs.writeFileSync(allowedClassesPath, JSON.stringify([], null, 2));
+    console.log('Created allowedClasses.json file');
+  }
+  
+  // Initialize quarantine file
+  if (!fs.existsSync(quarantinePath)) {
+    fs.writeFileSync(quarantinePath, JSON.stringify([], null, 2));
+    console.log('Created quarantine.json file');
+  }
+  
+  // Initialize audit file
+  if (!fs.existsSync(auditPath)) {
+    fs.writeFileSync(auditPath, JSON.stringify([], null, 2));
+    console.log('Created audit.json file');
   }
 };
 
-// Helper functions for data operations
 const readDataFile = (filePath) => {
   try {
     const data = fs.readFileSync(filePath, 'utf8');
     return JSON.parse(data);
   } catch (error) {
-    console.error(`Error reading file ${filePath}:`, error);
+    console.error(`Error reading data file ${filePath}:`, error.message);
     return [];
   }
 };
@@ -52,20 +54,19 @@ const readDataFile = (filePath) => {
 const writeDataFile = (filePath, data) => {
   try {
     fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
-    return true;
   } catch (error) {
-    console.error(`Error writing file ${filePath}:`, error);
-    return false;
+    console.error(`Error writing to data file ${filePath}:`, error.message);
   }
 };
 
 module.exports = {
-  dataDir,
+  initializeDataFiles,
+  readDataFile,
+  writeDataFile,
   whitelistPath,
   blockedAttemptsPath,
   logsPath,
   allowedClassesPath,
-  initializeDataFiles,
-  readDataFile,
-  writeDataFile
+  quarantinePath,
+  auditPath
 };
