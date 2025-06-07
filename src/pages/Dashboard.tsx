@@ -41,7 +41,7 @@ const Dashboard = () => {
       case 'whitelisted':
         return 'secondary';
       case 'quarantined':
-        return 'warning';
+        return 'destructive'; // Changed from 'warning' to 'destructive'
       default:
         return 'outline';
     }
