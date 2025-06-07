@@ -11,9 +11,6 @@ import { toast } from 'sonner';
 import Navigation from '@/components/Navigation';
 import { fetchUSBDevices } from '@/lib/usb-service';
 import WhitelistManager from '@/components/WhitelistManager';
-import NotificationSystem from '@/components/NotificationSystem';
-import DeviceAnalytics from '@/components/DeviceAnalytics';
-import ScheduledReports from '@/components/ScheduledReports';
 
 const Dashboard = () => {
   const [logs, setLogs] = useState<any[]>([]);
@@ -95,7 +92,6 @@ const Dashboard = () => {
             </div>
           </div>
           <div className="flex items-center space-x-3">
-            <NotificationSystem />
             <Button variant="outline">
               Download Report
             </Button>
@@ -104,11 +100,9 @@ const Dashboard = () => {
 
         {/* Main Content with Tabs */}
         <Tabs defaultValue="overview" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="analytics">Analytics</TabsTrigger>
             <TabsTrigger value="whitelist">Whitelist</TabsTrigger>
-            <TabsTrigger value="reports">Reports</TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
           </TabsList>
 
@@ -237,16 +231,8 @@ const Dashboard = () => {
             </Card>
           </TabsContent>
 
-          <TabsContent value="analytics" className="space-y-6">
-            <DeviceAnalytics logs={logs} />
-          </TabsContent>
-
           <TabsContent value="whitelist" className="space-y-6">
             <WhitelistManager />
-          </TabsContent>
-
-          <TabsContent value="reports" className="space-y-6">
-            <ScheduledReports />
           </TabsContent>
 
           <TabsContent value="settings" className="space-y-6">
