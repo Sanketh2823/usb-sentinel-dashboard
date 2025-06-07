@@ -7,8 +7,6 @@ const { blockUSBDevice, forceBlockUSBDevice, ejectUSBDevice, refreshUSBDevices }
 const { blockSpecificUsbDeviceOnMacOS, blockUsbClassOnMacOS } = require('../controllers/macos');
 const { formatDeviceIds, unblockWhitelistedDevice } = require('../helpers/whitelist');
 const { getDeviceClass } = require('../utils/device');
-const { addToQuarantine } = require('./quarantine');
-const { addAuditLog } = require('./audit');
 
 const router = express.Router();
 let wss;
@@ -51,14 +49,12 @@ router.get('/usb-devices', (req, res) => {
     const blockedAttempts = readDataFile(blockedAttemptsPath);
     const logs = readDataFile(logsPath);
     const allowedClasses = readDataFile('./data/allowedClasses.json');
-    const quarantinedDevices = readDataFile('./data/quarantine.json');
     
     res.json({
       whitelistedDevices,
       blockedAttempts,
       logs,
-      allowedClasses,
-      quarantinedDevices
+      allowedClasses
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -145,21 +141,6 @@ router.post('/whitelist', async (req, res) => {
     logs.unshift(logEntry);
     writeDataFile(logsPath, logs);
     
-    // Add audit log for whitelist addition
-    await addAuditLog({
-      userId: req.body.username || 'admin',
-      userName: req.body.username || 'Administrator',
-      action: 'Device Added to Whitelist',
-      targetType: 'device',
-      targetId: `${normalizedDevice.vendorId}:${normalizedDevice.productId}`,
-      targetName: `${device.manufacturer || 'Unknown'} ${device.description || 'Device'}`,
-      details: `Device whitelisted: ${normalizedDevice.vendorId}:${normalizedDevice.productId}`,
-      ipAddress: req.ip || '127.0.0.1',
-      userAgent: req.get('User-Agent') || 'Unknown',
-      severity: 'medium',
-      outcome: 'success'
-    });
-    
     // Broadcast update
     broadcastUpdate({ 
       whitelistUpdate: whitelistedDevices,
@@ -180,19 +161,6 @@ router.post('/whitelist', async (req, res) => {
       device: updatedDevice
     });
   } catch (error) {
-    // Add audit log for failed whitelist addition
-    await addAuditLog({
-      userId: req.body?.username || 'admin',
-      userName: req.body?.username || 'Administrator', 
-      action: 'Device Whitelist Addition Failed',
-      targetType: 'device',
-      details: `Failed to whitelist device: ${error.message}`,
-      ipAddress: req.ip || '127.0.0.1',
-      userAgent: req.get('User-Agent') || 'Unknown',
-      severity: 'high',
-      outcome: 'failure'
-    });
-    
     console.error("Error processing whitelist request:", error);
     res.status(500).json({ error: error.message });
   }

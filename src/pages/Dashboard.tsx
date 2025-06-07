@@ -1,3 +1,4 @@
+
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -10,8 +11,6 @@ import { toast } from 'sonner';
 import Navigation from '@/components/Navigation';
 import { fetchUSBDevices } from '@/lib/usb-service';
 import WhitelistManager from '@/components/WhitelistManager';
-import QuarantineManager from '@/components/QuarantineManager';
-import AuditTrail from '@/components/AuditTrail';
 
 const Dashboard = () => {
   const [logs, setLogs] = useState<any[]>([]);
@@ -40,8 +39,6 @@ const Dashboard = () => {
         return 'destructive';
       case 'whitelisted':
         return 'secondary';
-      case 'quarantined':
-        return 'destructive'; // Changed from 'warning' to 'destructive'
       default:
         return 'outline';
     }
@@ -103,11 +100,9 @@ const Dashboard = () => {
 
         {/* Main Content with Tabs */}
         <Tabs defaultValue="overview" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="whitelist">Whitelist</TabsTrigger>
-            <TabsTrigger value="quarantine">Quarantine</TabsTrigger>
-            <TabsTrigger value="audit">Audit Trail</TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
           </TabsList>
 
@@ -231,20 +226,10 @@ const Dashboard = () => {
           </TabsContent>
 
           <TabsContent value="whitelist" className="space-y-6">
-            {/* Whitelist Management */}
             <WhitelistManager />
           </TabsContent>
 
-          <TabsContent value="quarantine">
-            <QuarantineManager />
-          </TabsContent>
-
-          <TabsContent value="audit">
-            <AuditTrail />
-          </TabsContent>
-
           <TabsContent value="settings" className="space-y-6">
-            {/* Settings */}
             <Card>
               <CardHeader>
                 <CardTitle>Dashboard Settings</CardTitle>
