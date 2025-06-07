@@ -1,10 +1,11 @@
+
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Download, FileText, FileSpreadsheet, Shield, Clock, User, Network, Usb } from 'lucide-react';
+import { Download, FileText, FileSpreadsheet, Shield, Clock, User, Network, Usb, Wifi } from 'lucide-react';
 import { toast } from 'sonner';
 import Navigation from '@/components/Navigation';
 
@@ -40,7 +41,7 @@ const Reports = () => {
       // Add connection type based on device class or action
       const enhancedLogs = usbData.logs.map((log: LogEntry) => ({
         ...log,
-        connectionType: determineConnectionType(log)
+        connectionType: log.connectionType || determineConnectionType(log)
       }));
       setLogs(enhancedLogs);
     }
@@ -71,7 +72,27 @@ const Reports = () => {
   };
 
   const getConnectionIcon = (connectionType: string) => {
-    return connectionType === 'Network' ? Network : Usb;
+    switch (connectionType?.toLowerCase()) {
+      case 'network':
+        return Network;
+      case 'wifi':
+      case 'wireless':
+        return Wifi;
+      default:
+        return Usb;
+    }
+  };
+
+  const getConnectionBadgeVariant = (connectionType: string) => {
+    switch (connectionType?.toLowerCase()) {
+      case 'network':
+        return 'default';
+      case 'wifi':
+      case 'wireless':
+        return 'secondary';
+      default:
+        return 'outline';
+    }
   };
 
   const downloadPDF = async () => {
@@ -87,7 +108,7 @@ Date: ${new Date(log.date).toLocaleString()}
 Action: ${log.action}
 Device: ${log.device}
 Class: ${log.deviceClass}
-Connection Type: ${log.connectionType || 'USB'}
+Source: ${log.connectionType || 'USB'}
 Status: ${log.status}
 User: ${log.username}
 ---
@@ -117,7 +138,7 @@ Total Entries: ${logs.length}
   const downloadCSV = () => {
     try {
       // Create CSV content
-      const csvHeader = 'Date,Action,Device,Device Class,Connection Type,Status,Username\n';
+      const csvHeader = 'Date,Action,Device,Device Class,Source,Status,Username\n';
       const csvContent = logs.map(log => 
         `"${new Date(log.date).toLocaleString()}","${log.action}","${log.device}","${log.deviceClass}","${log.connectionType || 'USB'}","${log.status}","${log.username}"`
       ).join('\n');
@@ -216,12 +237,12 @@ Total Entries: ${logs.length}
           
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Unique Users</CardTitle>
-              <User className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-sm font-medium">Network Sources</CardTitle>
+              <Network className="h-4 w-4 text-blue-500" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">
-                {new Set(logs.map(log => log.username)).size}
+              <div className="text-2xl font-bold text-blue-600">
+                {logs.filter(log => log.connectionType?.toLowerCase() === 'network').length}
               </div>
             </CardContent>
           </Card>
@@ -232,7 +253,7 @@ Total Entries: ${logs.length}
           <CardHeader>
             <CardTitle>Security Activity Log</CardTitle>
             <CardDescription>
-              Complete history of USB device access attempts and actions
+              Complete history of device access attempts with connectivity source tracking
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -249,7 +270,7 @@ Total Entries: ${logs.length}
                       <TableHead>Action</TableHead>
                       <TableHead>Device</TableHead>
                       <TableHead>Class</TableHead>
-                      <TableHead>Connection Type</TableHead>
+                      <TableHead>Source</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>User</TableHead>
                     </TableRow>
@@ -274,7 +295,9 @@ Total Entries: ${logs.length}
                           <TableCell>
                             <div className="flex items-center space-x-2">
                               <ConnectionIcon className="h-4 w-4" />
-                              <span>{log.connectionType || 'USB'}</span>
+                              <Badge variant={getConnectionBadgeVariant(log.connectionType || 'USB')}>
+                                {log.connectionType || 'USB'}
+                              </Badge>
                             </div>
                           </TableCell>
                           <TableCell>
