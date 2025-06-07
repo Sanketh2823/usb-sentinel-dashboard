@@ -11,6 +11,9 @@ import { toast } from 'sonner';
 import Navigation from '@/components/Navigation';
 import { fetchUSBDevices } from '@/lib/usb-service';
 import WhitelistManager from '@/components/WhitelistManager';
+import NotificationSystem from '@/components/NotificationSystem';
+import DeviceAnalytics from '@/components/DeviceAnalytics';
+import ScheduledReports from '@/components/ScheduledReports';
 
 const Dashboard = () => {
   const [logs, setLogs] = useState<any[]>([]);
@@ -91,7 +94,8 @@ const Dashboard = () => {
               <p className="text-muted-foreground">Monitor and manage USB device access</p>
             </div>
           </div>
-          <div>
+          <div className="flex items-center space-x-3">
+            <NotificationSystem />
             <Button variant="outline">
               Download Report
             </Button>
@@ -100,9 +104,11 @@ const Dashboard = () => {
 
         {/* Main Content with Tabs */}
         <Tabs defaultValue="overview" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="analytics">Analytics</TabsTrigger>
             <TabsTrigger value="whitelist">Whitelist</TabsTrigger>
+            <TabsTrigger value="reports">Reports</TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
           </TabsList>
 
@@ -179,6 +185,7 @@ const Dashboard = () => {
                           <TableHead>Device</TableHead>
                           <TableHead>Class</TableHead>
                           <TableHead>Source</TableHead>
+                          <TableHead>Connection</TableHead>
                           <TableHead>Status</TableHead>
                           <TableHead>User</TableHead>
                         </TableRow>
@@ -201,6 +208,11 @@ const Dashboard = () => {
                                 <Badge variant="outline">{log.deviceClass}</Badge>
                               </TableCell>
                               <TableCell>
+                                <Badge variant="secondary">
+                                  {log.source || 'Local'}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
                                 <div className="flex items-center space-x-2">
                                   <ConnectionIcon className="h-4 w-4" />
                                   <Badge variant={getConnectionBadgeVariant(log.connectionType || 'USB')}>
@@ -213,7 +225,7 @@ const Dashboard = () => {
                                   {log.status}
                                 </Badge>
                               </TableCell>
-                              <TableCell>{log.username}</TableCell>
+                              <TableCell>{log.username || 'System'}</TableCell>
                             </TableRow>
                           );
                         })}
@@ -225,8 +237,16 @@ const Dashboard = () => {
             </Card>
           </TabsContent>
 
+          <TabsContent value="analytics" className="space-y-6">
+            <DeviceAnalytics logs={logs} />
+          </TabsContent>
+
           <TabsContent value="whitelist" className="space-y-6">
             <WhitelistManager />
+          </TabsContent>
+
+          <TabsContent value="reports" className="space-y-6">
+            <ScheduledReports />
           </TabsContent>
 
           <TabsContent value="settings" className="space-y-6">
