@@ -1,3 +1,4 @@
+
 const { getDeviceClass } = require('./utils/device');
 const { readDataFile, writeDataFile, whitelistPath, blockedAttemptsPath, logsPath } = require('./config');
 const { blockUSBDevice } = require('./controllers/usb');
@@ -29,26 +30,8 @@ const blockChargingCable = async (device) => {
   }
 };
 
-// Helper function to determine connection type
-const determineConnectionType = (device) => {
-  if (!device) return 'USB';
-  
-  const deviceStr = (device.description || device.manufacturer || '').toLowerCase();
-  const deviceClass = (device.deviceClass || '').toLowerCase();
-  
-  if (deviceClass.includes('network') || 
-      deviceStr.includes('ethernet') ||
-      deviceStr.includes('wifi') ||
-      deviceStr.includes('bluetooth') ||
-      deviceStr.includes('wireless')) {
-    return 'Network';
-  }
-  
-  return 'USB';
-};
-
 // Improved device block logic - more aggressive for macOS
-const quarantineDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevices, broadcastUpdate) => {
+const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevices, broadcastUpdate) => {
   // Format device identifiers consistently first
   const formattedDevice = formatDeviceIds(device);
   
@@ -84,14 +67,12 @@ const quarantineDeviceIfNotWhitelisted = async (device, deviceClass, whitelisted
       console.error("Error during critical device unblocking:", error);
     }
     
-    // Log allowed whitelisted device connection with connection type
+    // Log allowed whitelisted device connection
     const logs = readDataFile(logsPath);
-    const connectionType = determineConnectionType(device);
     const logEntry = {
       action: 'Allowed Device Connect',
       device: `${device.manufacturer || 'Unknown'} ${device.description || 'Device'} (${formattedDevice.vendorId}:${formattedDevice.productId})`,
       deviceClass,
-      connectionType,
       status: "allowed", // Explicitly mark as allowed
       date: new Date().toISOString(),
       id: Date.now()
@@ -110,33 +91,63 @@ const quarantineDeviceIfNotWhitelisted = async (device, deviceClass, whitelisted
     return false;
   }
 
-  console.log(`QUARANTINING DEVICE: ${formattedDevice.vendorId}:${formattedDevice.productId} (Class: ${deviceClass})`);
+  console.log(`BLOCKING DEVICE: ${formattedDevice.vendorId}:${formattedDevice.productId} (Class: ${deviceClass})`);
   
-  // Add to quarantine instead of immediate blocking
-  const quarantineEntry = await addToQuarantine(device, 'Unknown device requires review');
+  // More aggressive blocking for macOS
+  if (os.platform() === 'darwin') {
+    console.log("Using enhanced macOS blocking methods");
+    await blockSpecificUsbDeviceOnMacOS(
+      formattedDevice.vendorId,
+      formattedDevice.productId
+    );
+  }
   
-  // Log quarantine action with connection type
-  const logs = readDataFile(logsPath);
-  const connectionType = determineConnectionType(device);
+  // Also use the standard blocking method as a backup
+  await blockUSBDevice(
+    formattedDevice.vendorId,
+    formattedDevice.productId
+  );
+
+  // Add to blocked attempts + logging
+  const blockedAttempts = readDataFile(blockedAttemptsPath);
   
-  const logEntry = {
-    action: 'Device Quarantined',
-    device: `${device.manufacturer || 'Unknown'} ${device.description || 'Device'} (${formattedDevice.vendorId}:${formattedDevice.productId})`,
+  const deviceInfo = {
+    vendorId: formattedDevice.vendorId,
+    productId: formattedDevice.productId,
     deviceClass,
-    connectionType,
-    status: "quarantined",
+    manufacturer: device.manufacturer || 'Unknown',
+    description: device.description || 'Unknown Device',
+    isStorage: isStorageClass(deviceClass),
+    status: "blocked",
     date: new Date().toISOString(),
-    id: Date.now(),
-    username: 'System'
+    id: Date.now()
+  };
+  
+  // Log details for troubleshooting
+  console.log(`Adding to blocked attempts: ${JSON.stringify(deviceInfo)}`);
+  
+  // Ensure we're actually adding it to the blockedAttempts array
+  blockedAttempts.unshift(deviceInfo);
+  writeDataFile(blockedAttemptsPath, blockedAttempts);
+
+  const logs = readDataFile(logsPath);
+  const logEntry = {
+    action: 'Block Attempt',
+    device: `${deviceInfo.manufacturer || 'Unknown'} ${deviceInfo.description || 'Device'} (${deviceInfo.vendorId}:${deviceInfo.productId})`,
+    deviceClass,
+    deviceType: isStorageClass(deviceClass) ? 'Storage Device' : 'Standard Device',
+    status: "blocked",
+    date: new Date().toISOString(),
+    id: Date.now()
   };
   logs.unshift(logEntry);
   writeDataFile(logsPath, logs);
 
-  // Broadcast quarantine update
+  // Broadcast both the blockedAttempts update and the new log
   broadcastUpdate({
-    quarantineUpdate: [quarantineEntry],
+    blockedAttemptsUpdate: blockedAttempts,
     newLog: logEntry,
-    newQuarantineDevice: quarantineEntry
+    newBlockedAttempt: deviceInfo  // Make sure this is included for the UI update
   });
 
   return true;
@@ -184,17 +195,15 @@ const setupUsbMonitor = (usbDetect, broadcastUpdate) => {
         }
       }
 
-      const wasQuarantined = await quarantineDeviceIfNotWhitelisted(device, deviceClass, whitelistedDevices, broadcastUpdate);
+      const wasBlocked = await blockDeviceIfNotWhitelisted(device, deviceClass, whitelistedDevices, broadcastUpdate);
 
-      if (!wasQuarantined) {
+      if (!wasBlocked) {
         const logs = readDataFile(logsPath);
         const isWhite = isWhitelisted(device, whitelistedDevices);
-        const connectionType = determineConnectionType(device);
         const logEntry = {
           action: isWhite ? 'Allowed Device Connect' : 'Allowed HID/Mouse Device',
           device: `${device.manufacturer || 'Unknown'} ${device.description || 'Device'} (${device.vendorId.toString(16).padStart(4, "0")}:${device.productId.toString(16).padStart(4, "0")})`,
           deviceClass,
-          connectionType,
           status: "allowed",
           date: new Date().toISOString(),
           id: Date.now()

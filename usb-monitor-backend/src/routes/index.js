@@ -25,31 +25,12 @@ const broadcastUpdate = (data) => {
   }
 };
 
-// Helper function to determine connection type
-const determineConnectionType = (device) => {
-  if (!device) return 'USB';
-  
-  const deviceStr = (device.description || device.manufacturer || '').toLowerCase();
-  const deviceClass = (device.deviceClass || '').toLowerCase();
-  
-  if (deviceClass.includes('network') || 
-      deviceStr.includes('ethernet') ||
-      deviceStr.includes('wifi') ||
-      deviceStr.includes('bluetooth') ||
-      deviceStr.includes('wireless')) {
-    return 'Network';
-  }
-  
-  return 'USB';
-};
-
 router.get('/usb-devices', (req, res) => {
   try {
     const whitelistedDevices = readDataFile(whitelistPath);
     const blockedAttempts = readDataFile(blockedAttemptsPath);
     const logs = readDataFile(logsPath);
     const allowedClasses = readDataFile('./data/allowedClasses.json');
-    
     res.json({
       whitelistedDevices,
       blockedAttempts,
@@ -125,14 +106,12 @@ router.post('/whitelist', async (req, res) => {
       console.error("Error during device unblocking:", unblockError);
     }
     
-    // Add to logs with connection type
+    // Add to logs
     const logs = readDataFile(logsPath);
-    const connectionType = determineConnectionType(device);
     const logEntry = {
       action: 'Whitelist Addition',
       device: `${device.manufacturer || 'Unknown'} ${device.description || 'Device'} (${normalizedDevice.vendorId}:${normalizedDevice.productId})`,
       deviceClass: device.deviceClass || 'Unknown',
-      connectionType,
       status: "allowed",
       date: new Date().toISOString(),
       id: Date.now(),
