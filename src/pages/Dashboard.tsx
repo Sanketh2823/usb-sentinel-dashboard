@@ -1,7 +1,6 @@
-
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Shield, List, Plus, Database, Check, X, Filter, Ban, Settings, AlertTriangle, Lock } from "lucide-react";
+import { Shield, List, Plus, Database, Check, X, Filter, Ban, Settings, AlertTriangle, Lock, Network, Usb } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -353,6 +352,13 @@ const Dashboard = () => {
     }
   };
 
+  const getConnectionIcon = (connectionType) => {
+    if (connectionType === 'Network') {
+      return <Network className="w-4 h-4 text-blue-600" />;
+    }
+    return <Usb className="w-4 h-4 text-gray-600" />;
+  };
+
   const stats = [{
     title: "Total USB Events",
     value: logs.length.toString(),
@@ -453,6 +459,7 @@ const Dashboard = () => {
                         <TableHead>Manufacturer</TableHead>
                         <TableHead>Username</TableHead>
                         <TableHead>Class</TableHead>
+                        <TableHead>Source</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Actions</TableHead>
                       </TableRow>
@@ -464,6 +471,12 @@ const Dashboard = () => {
                             <TableCell>{device.manufacturer}</TableCell>
                             <TableCell>{device.username}</TableCell>
                             <TableCell>{getDeviceClassInfo(device.deviceClass)}</TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1">
+                                {getConnectionIcon(device.connectionType || 'USB')}
+                                <span className="text-sm">{device.connectionType || 'USB'}</span>
+                              </div>
+                            </TableCell>
                             <TableCell>
                               <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
                                 <Check className="w-3 h-3 mr-1" />
@@ -477,7 +490,7 @@ const Dashboard = () => {
                               </Button>
                             </TableCell>
                           </TableRow>) : <TableRow>
-                          <TableCell colSpan={7} className="text-center py-4 text-gray-500">
+                          <TableCell colSpan={8} className="text-center py-4 text-gray-500">
                             No whitelisted devices found
                           </TableCell>
                         </TableRow>}
@@ -498,6 +511,7 @@ const Dashboard = () => {
                         <TableHead>Vendor ID</TableHead>
                         <TableHead>Manufacturer</TableHead>
                         <TableHead>Class</TableHead>
+                        <TableHead>Source</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Action</TableHead>
                       </TableRow>
@@ -511,6 +525,12 @@ const Dashboard = () => {
                             <TableCell>{device.manufacturer}</TableCell>
                             <TableCell>{getDeviceClassInfo(device.deviceClass)}</TableCell>
                             <TableCell>
+                              <div className="flex items-center gap-1">
+                                {getConnectionIcon(device.connectionType || 'USB')}
+                                <span className="text-sm">{device.connectionType || 'USB'}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
                               <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
                                 <X className="w-3 h-3 mr-1" />
                                 {device.status}
@@ -522,7 +542,7 @@ const Dashboard = () => {
                               </Button>
                             </TableCell>
                           </TableRow>) : <TableRow>
-                          <TableCell colSpan={8} className="text-center py-4 text-gray-500">
+                          <TableCell colSpan={9} className="text-center py-4 text-gray-500">
                             No blocked attempts found
                           </TableCell>
                         </TableRow>}
@@ -568,6 +588,7 @@ const Dashboard = () => {
                         <TableHead>Vendor ID</TableHead>
                         <TableHead>Manufacturer</TableHead>
                         <TableHead>Class</TableHead>
+                        <TableHead>Source</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Action</TableHead>
                       </TableRow>
@@ -581,6 +602,12 @@ const Dashboard = () => {
                             <TableCell>{log.manufacturer}</TableCell>
                             <TableCell>{getDeviceClassInfo(log.deviceClass)}</TableCell>
                             <TableCell>
+                              <div className="flex items-center gap-1">
+                                {getConnectionIcon(log.connectionType || 'USB')}
+                                <span className="text-sm">{log.connectionType || 'USB'}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
                               <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${log.status === "allowed" ? "bg-green-100 text-green-800" : log.status === "blocked" ? "bg-red-100 text-red-800" : "bg-gray-100 text-gray-800"}`}>
                                 {log.status === "allowed" ? <Check className="w-3 h-3 mr-1" /> : log.status === "blocked" ? <X className="w-3 h-3 mr-1" /> : null}
                                 {log.status}
@@ -588,7 +615,7 @@ const Dashboard = () => {
                             </TableCell>
                             <TableCell>{log.action}</TableCell>
                           </TableRow>) : <TableRow>
-                          <TableCell colSpan={8} className="text-center py-4 text-gray-500">
+                          <TableCell colSpan={9} className="text-center py-4 text-gray-500">
                             No logs found matching your filters
                           </TableCell>
                         </TableRow>}
