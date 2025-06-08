@@ -1,3 +1,4 @@
+
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { Shield, List, Plus, Database, Check, X, Filter, Ban, Settings, AlertTriangle, Lock } from "lucide-react";
@@ -9,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Navigation } from "@/components/Navigation";
+import Navigation from "@/components/Navigation";
 import { 
   fetchUSBDevices, 
   monitorUSBPorts, 
