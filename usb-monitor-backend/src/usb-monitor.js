@@ -1,4 +1,3 @@
-
 const { getDeviceClass } = require('./utils/device');
 const { readDataFile, writeDataFile, whitelistPath, blockedAttemptsPath, logsPath } = require('./config');
 const { blockUSBDevice } = require('./controllers/usb');
@@ -28,6 +27,24 @@ const blockChargingCable = async (device) => {
     console.error('Error handling charging cable:', error);
     return false;
   }
+};
+
+// Helper function to determine connection type
+const determineConnectionType = (device) => {
+  if (!device) return 'USB';
+  
+  const deviceStr = (device.description || device.manufacturer || '').toLowerCase();
+  const deviceClass = (device.deviceClass || '').toLowerCase();
+  
+  if (deviceClass.includes('network') || 
+      deviceStr.includes('ethernet') ||
+      deviceStr.includes('wifi') ||
+      deviceStr.includes('bluetooth') ||
+      deviceStr.includes('wireless')) {
+    return 'Network';
+  }
+  
+  return 'USB';
 };
 
 // Improved device block logic - more aggressive for macOS
@@ -67,12 +84,14 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevic
       console.error("Error during critical device unblocking:", error);
     }
     
-    // Log allowed whitelisted device connection
+    // Log allowed whitelisted device connection with connection type
     const logs = readDataFile(logsPath);
+    const connectionType = determineConnectionType(device);
     const logEntry = {
       action: 'Allowed Device Connect',
       device: `${device.manufacturer || 'Unknown'} ${device.description || 'Device'} (${formattedDevice.vendorId}:${formattedDevice.productId})`,
       deviceClass,
+      connectionType,
       status: "allowed", // Explicitly mark as allowed
       date: new Date().toISOString(),
       id: Date.now()
@@ -108,8 +127,9 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevic
     formattedDevice.productId
   );
 
-  // Add to blocked attempts + logging
+  // Add to blocked attempts + logging with connection type
   const blockedAttempts = readDataFile(blockedAttemptsPath);
+  const connectionType = determineConnectionType(device);
   
   const deviceInfo = {
     vendorId: formattedDevice.vendorId,
@@ -118,6 +138,7 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevic
     manufacturer: device.manufacturer || 'Unknown',
     description: device.description || 'Unknown Device',
     isStorage: isStorageClass(deviceClass),
+    connectionType,
     status: "blocked",
     date: new Date().toISOString(),
     id: Date.now()
@@ -135,6 +156,7 @@ const blockDeviceIfNotWhitelisted = async (device, deviceClass, whitelistedDevic
     action: 'Block Attempt',
     device: `${deviceInfo.manufacturer || 'Unknown'} ${deviceInfo.description || 'Device'} (${deviceInfo.vendorId}:${deviceInfo.productId})`,
     deviceClass,
+    connectionType,
     deviceType: isStorageClass(deviceClass) ? 'Storage Device' : 'Standard Device',
     status: "blocked",
     date: new Date().toISOString(),
@@ -200,10 +222,12 @@ const setupUsbMonitor = (usbDetect, broadcastUpdate) => {
       if (!wasBlocked) {
         const logs = readDataFile(logsPath);
         const isWhite = isWhitelisted(device, whitelistedDevices);
+        const connectionType = determineConnectionType(device);
         const logEntry = {
           action: isWhite ? 'Allowed Device Connect' : 'Allowed HID/Mouse Device',
           device: `${device.manufacturer || 'Unknown'} ${device.description || 'Device'} (${device.vendorId.toString(16).padStart(4, "0")}:${device.productId.toString(16).padStart(4, "0")})`,
           deviceClass,
+          connectionType,
           status: "allowed",
           date: new Date().toISOString(),
           id: Date.now()

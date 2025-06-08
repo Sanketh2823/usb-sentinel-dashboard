@@ -1,7 +1,7 @@
 
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Shield } from "lucide-react";
+import { Shield, FileText } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 const Auth = () => {
@@ -26,6 +26,10 @@ const Auth = () => {
         description: "Invalid password. Please try again.",
       });
     }
+  };
+
+  const handleReportsAccess = () => {
+    navigate("/reports");
   };
 
   return (
@@ -55,12 +59,21 @@ const Auth = () => {
             </div>
           </div>
 
-          <div>
+          <div className="space-y-3">
             <button
               type="submit"
               className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-lg text-white bg-primary hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary transition-all duration-200"
             >
-              Sign in
+              Sign in to Dashboard
+            </button>
+            
+            <button
+              type="button"
+              onClick={handleReportsAccess}
+              className="group relative w-full flex justify-center items-center space-x-2 py-2 px-4 border border-gray-300 text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary transition-all duration-200"
+            >
+              <FileText className="h-4 w-4" />
+              <span>View Reports</span>
             </button>
           </div>
         </form>
